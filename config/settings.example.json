@@ -1,0 +1,13 @@
+{
+  "region": "us-east-1",
+  "lake_bucket": "jared-patientflow-lake-<suffix>",
+  "athena_results_bucket": "jared-athena-results-2026",
+  "glue_databases": { "silver": "pf_silver", "gold": "pf_gold" },
+  "athena_workgroup": "pf-wg",
+  "lambda_name": "pf-ingest",
+  "glue_job_name": "pf-bronze-to-silver",
+  "state_machine_name": "pf-daily-pipeline",
+  "schedule_name": "pf-daily-schedule",
+  "first_ingest_date": "2026-11-01",
+  "number_of_batches": 10
+}

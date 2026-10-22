@@ -1,0 +1,6 @@
+boto3
+awswrangler
+pandas
+matplotlib
+jupyter
+pytest
