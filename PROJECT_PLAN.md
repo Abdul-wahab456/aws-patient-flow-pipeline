@@ -27,6 +27,7 @@ An end-to-end, code-first data pipeline on AWS that ingests **synthetic hospital
 | 2026-10-26 | **Build order:** first a **simple end-to-end pipeline** (Phases 4-9: Lambda, Glue, gold, Step Functions started by hand), then the upgrades one at a time: event trigger (10), CloudFormation (11), CI/CD (12), Power BI (13). |
 | 2026-10-26 | **CI built early:** the GitHub Actions workflow `ci.yml` (ruff lint + pytest with coverage + JSON validation) already exists and runs from the first push. The CD part (auto-deploy to AWS) stays in Phase 12 because it needs the CloudFormation stacks of Phase 11. |
 | 2026-10-26 | **Light CD built early (before Phase 6):** `deploy.yml` + `infra/deploy.py` deploy the Glue job and the ingest Lambda after every push to `main`, logging in to AWS with OIDC (no stored keys) and versioning the Glue scripts by commit id. Details: `docs/cd_github_actions.md`. Phase 11/12 later switch it to deploying the CloudFormation stacks. |
+| 2026-10-27 | **Gold layer design changes found by testing on AWS:** `fact_encounter` is partitioned by **year**, not month (the visits span 1924-2026 and Athena allows at most 100 partitions written per query); `dim_date` covers **1900-2030**, not 2015-2027; the doctor key is the NPI (`practitioner_npi`, `dim_practitioner` keyed on `npi`). |
 
 **Owner:** Jared (data engineer; experienced with Databricks, Delta Lake, Snowflake, Azure; learning AWS Glue).
 
@@ -162,11 +163,11 @@ Rules: timestamps cast to `timestamp` (stored as UTC instants), IDs as plain str
 
 | Table              | Grain / key     | Notes                                                                                                                                                                                                                                         |
 | ------------------ | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dim_patient`      | patient_id      | SCD Type 1 via `MERGE`; include `age_years` (as of `current_date`), `age_group`                                                                                                                                                               |
+| `dim_patient`      | patient_id      | SCD Type 1 via `MERGE`; include `age_years` (as of the day the MERGE runs), `age_group`, `is_deceased`                                                                                                                                                               |
 | `dim_facility`     | organization_id | from organization                                                                                                                                                                                                                             |
-| `dim_practitioner` | practitioner_id | from practitioner                                                                                                                                                                                                                             |
-| `dim_date`         | date            | one-time CTAS using `sequence()` + `UNNEST` (2015-01-01 → 2027-12-31): year, quarter, month, day_of_week, is_weekend                                                                                                                          |
-| `fact_encounter`   | encounter_id    | patient_id, organization_id, practitioner_id, encounter_class, start_ts, end_ts, start_date, end_date, los_hours, los_days, is_inpatient, is_emergency, reason_code, reason_display, primary_condition_code; partitioned by `month(start_ts)` |
+| `dim_practitioner` | npi             | from practitioner; keyed on the NPI because encounters reference doctors by NPI (`practitioner_id` kept as an attribute)                                                                                                                                       |
+| `dim_date`         | date            | one-time CTAS using `sequence()` + `UNNEST` (**1900-01-01 → 2030-12-31**, because the data goes back to 1924): year, quarter, month, month_name, day_of_month, day_of_week, day_name, is_weekend                                                                              |
+| `fact_encounter`   | encounter_id    | patient_id, organization_id, practitioner_npi, encounter_class, start_ts, end_ts, start_date, end_date, los_hours, los_days, is_inpatient, is_emergency, reason_code, reason_display, primary_condition_code; partitioned by **`year(start_ts)`** (month gives up to 352 partitions per batch; Athena writes at most 100 per query) |
 
 **Join to remember for gold:** `fact_encounter` takes the doctor from `encounter.practitioner_npi`; `dim_practitioner` is keyed on `npi` (the Practitioner `practitioner_id` stays as an attribute).
 
@@ -247,13 +248,13 @@ Each phase: build → verify with CLI → commit to Git → confirm with Jared.
 | 3 | AWS foundation: buckets, catalog, workgroup, IAM roles, data upload (CLI notebooks) | ✅ done |
 | 4 | Ingest Lambda (bronze) | ✅ done |
 | 5 | Glue job (bronze to silver) | ✅ done |
-| 6 | Gold layer (Athena + Iceberg) | next |
-| 7 | Orchestration with Step Functions (started by hand) | |
+| 6 | Gold layer (Athena + Iceberg) | ✅ done |
+| 7 | Orchestration with Step Functions (started by hand) | next |
 | 8 | Data quality and notebooks | |
 | 9 | Run all 4 batches, first README | |
 | 10 | **Upgrade A:** new batch starts the pipeline (event-driven) | |
 | 11 | **Upgrade B:** infrastructure as CloudFormation YAML | |
-| 12 | **Upgrade C:** CD: GitHub Actions deploys to AWS (CI and a light CD for the Glue job and the Lambda are already built; this phase moves it to CloudFormation) | partly done |
+| 12 | **Upgrade C:** CD: GitHub Actions deploys to AWS (CI and a light CD for the Glue job and the Lambda are built and verified; this phase moves it to CloudFormation) | partly done ✅ |
 | 13 | Power BI report (optional) | |
 | 14 | Final README and teardown | |
 

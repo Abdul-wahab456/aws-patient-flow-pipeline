@@ -15,6 +15,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from sql_files import count_parameters, parse_result_rows, quote_date, read_statements
+
 ROOT = Path(__file__).resolve().parents[1]
 
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text())
@@ -92,18 +94,23 @@ def whoami():
     return aws_json("sts", "get-caller-identity")["Arn"].split(":")[-1]
 
 
-def run_athena(sql, workgroup=None, timeout=120):
+def run_athena(sql, workgroup=None, timeout=120, parameters=None):
     """Run one SQL statement in Athena, wait for it to finish and return the result.
 
     Athena is asynchronous: start-query-execution only *starts* the query and
     returns an id; we then poll get-query-execution until it reaches a final state.
 
+    `parameters` fills the ? placeholders of the SQL, in order. Text values include their quotes,
+    e.g. ["'2026-11-01'"].
+
     Returns a dict: query_id, scanned_bytes, header (column names), rows (list of lists).
     Raises RuntimeError if the query fails or is cancelled, TimeoutError if it takes too long.
     """
     workgroup = workgroup or SETTINGS["athena_workgroup"]
-    query_id = aws_json("athena", "start-query-execution",
-                        "--query-string", sql, "--work-group", workgroup)["QueryExecutionId"]
+    command = ["athena", "start-query-execution", "--query-string", sql, "--work-group", workgroup]
+    if parameters:
+        command += ["--execution-parameters", *parameters]
+    query_id = aws_json(*command)["QueryExecutionId"]
 
     deadline = time.time() + timeout
     while True:
@@ -120,12 +127,13 @@ def run_athena(sql, workgroup=None, timeout=120):
         raise RuntimeError(f"Athena query {state}: {reason}")
 
     result = aws_json("athena", "get-query-results", "--query-execution-id", query_id)
-    table = [[cell.get("VarCharValue") for cell in row["Data"]] for row in result["ResultSet"]["Rows"]]
+    # Only a query (statement type DML, such as SELECT) starts with a header row; SHOW/DESCRIBE (UTILITY) do not
+    header, rows = parse_result_rows(result["ResultSet"]["Rows"], has_header=execution.get("StatementType") == "DML")
     return {
         "query_id": query_id,
         "scanned_bytes": execution["Statistics"].get("DataScannedInBytes", 0),
-        "header": table[0],
-        "rows": table[1:],
+        "header": header,
+        "rows": rows,
     }
 
 
@@ -135,9 +143,21 @@ def run_glue_job(job_name, arguments, timeout=1200, poll=10):
     `arguments` are the job arguments, e.g. {"--ingest_date": "2026-11-01"}.
     Returns a dict: run_id, state, error (message or None), execution_seconds, dpu_seconds.
     Does not raise when the job fails; the caller decides (a test may expect a failure).
+    If the job is still busy with a previous run, waits up to 3 minutes for it to finish.
     """
-    run_id = aws_json("glue", "start-job-run", "--job-name", job_name,
-                      "--arguments", json.dumps(arguments))["JobRunId"]
+    # A job normally allows one run at a time, and the slot of a run that just finished is released a few
+    # seconds after its state shows SUCCEEDED. Starting right away can fail with ConcurrentRunsExceeded: retry.
+    give_up_at = time.time() + 180
+    while True:
+        try:
+            run_id = aws_json("glue", "start-job-run", "--job-name", job_name,
+                              "--arguments", json.dumps(arguments))["JobRunId"]
+            break
+        except RuntimeError as error:
+            if "ConcurrentRunsExceededException" not in str(error) or time.time() > give_up_at:
+                raise
+            print("  another run of this job is still finishing; waiting 10 s")
+            time.sleep(10)
     print(f"started {job_name} run {run_id}")
 
     deadline = time.time() + timeout
@@ -190,3 +210,18 @@ def render_policy(filename):
     if "__" in text:
         raise ValueError(f"{filename}: unfilled placeholder left in the policy")
     return json.dumps(json.loads(text))
+
+
+def run_sql_file(path, ingest_date=None, **placeholders):
+    """Run every statement of a SQL file in Athena and return the result of the last one.
+
+    {{LAKE_BUCKET}} is always available as a placeholder; extra ones can be passed as keyword arguments.
+    If a statement contains ? parameters, `ingest_date` (YYYY-MM-DD) fills all of them.
+    """
+    result = None
+    for statement in read_statements(ROOT / path, {"LAKE_BUCKET": LAKE, **placeholders}):
+        wanted = count_parameters(statement)
+        if wanted and not ingest_date:
+            raise ValueError(f"{path} needs an ingest_date")
+        result = run_athena(statement, parameters=[quote_date(ingest_date)] * wanted if wanted else None, timeout=300)
+    return result

@@ -80,3 +80,15 @@ Settings are read from `config/settings.json`; the laptop's own AWS login is use
 - A failed check (lint or test) stops the workflow before any AWS call.
 - Two pushes close together do not deploy at the same time (`concurrency: deploy`).
 - This is the first version of CD: it uses boto3 calls. In Phase 11/12 the same workflow will deploy the CloudFormation stacks instead; the login, the versioning idea and the checks stay.
+
+## Verified end to end (2026-10-26)
+| Check | Result |
+|---|---|
+| Push of commit `b1c03e2` to `main` | `Deploy` workflow green: `checks` job (lint + 58 tests) then `deploy` job |
+| S3 | new folder `glue_scripts/b1c03e262a.../` holding `bronze_to_silver.py` and `fhir_utils.py` |
+| Glue job | `ScriptLocation` and `--extra-py-files` point at that commit's folder; settings unchanged (Glue 5.0, 2 workers, 10 min, 0 retries) |
+| Lambda | code and configuration updated by the same deployment; `NUMBER_OF_BATCHES` = 4 |
+| The deployed Lambda, batch 1 | `OK`, 37 files |
+| The deployed Glue job, batch 1 | `SUCCEEDED` in 110 s (about $0.03); patient 35, encounter 1,411, condition 854, organization 521, practitioner 521: identical to the earlier verified run |
+
+Problems met on the way (both fixed): the variable `AWS_DEPLOY_ROLE_ARN` first held an instruction sentence instead of the ARN (error "Source Account ID is needed if the Role Name is provided and not the Role ARN"), and the trust rule expected GitHub's subject without the numeric ids (error "Not authorized to perform sts:AssumeRoleWithWebIdentity").
