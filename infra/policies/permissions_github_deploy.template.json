@@ -6,7 +6,13 @@
       "Effect": "Allow",
       "Action": "s3:ListBucket",
       "Resource": "arn:aws:s3:::__LAKE__",
-      "Condition": { "StringLike": { "s3:prefix": ["glue_scripts/*"] } }
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "glue_scripts/*"
+          ]
+        }
+      }
     },
     {
       "Sid": "UploadGlueScripts",
@@ -17,7 +23,12 @@
     {
       "Sid": "ManageTheGlueJob",
       "Effect": "Allow",
-      "Action": ["glue:GetJob", "glue:CreateJob", "glue:UpdateJob", "glue:TagResource"],
+      "Action": [
+        "glue:GetJob",
+        "glue:CreateJob",
+        "glue:UpdateJob",
+        "glue:TagResource"
+      ],
       "Resource": "arn:aws:glue:__REGION__:__ACCOUNT__:job/__GLUE_JOB__"
     },
     {
@@ -36,14 +47,77 @@
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::__ACCOUNT__:role/pf-glue-role",
-      "Condition": { "StringEquals": { "iam:PassedToService": "glue.amazonaws.com" } }
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "glue.amazonaws.com"
+        }
+      }
     },
     {
       "Sid": "HandTheLambdaRoleToLambda",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::__ACCOUNT__:role/pf-lambda-role",
-      "Condition": { "StringEquals": { "iam:PassedToService": "lambda.amazonaws.com" } }
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "lambda.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "FindTheStateMachine",
+      "Effect": "Allow",
+      "Action": "states:ListStateMachines",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageTheStateMachine",
+      "Effect": "Allow",
+      "Action": [
+        "states:CreateStateMachine",
+        "states:UpdateStateMachine",
+        "states:DescribeStateMachine",
+        "states:TagResource"
+      ],
+      "Resource": "arn:aws:states:__REGION__:__ACCOUNT__:stateMachine:__STATE_MACHINE__"
+    },
+    {
+      "Sid": "HandTheStepFunctionsRoleToStepFunctions",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/pf-step-functions-role",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "states.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "WorkflowLogGroup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:PutRetentionPolicy"
+      ],
+      "Resource": [
+        "arn:aws:logs:__REGION__:__ACCOUNT__:log-group:/aws/vendedlogs/states/__STATE_MACHINE__",
+        "arn:aws:logs:__REGION__:__ACCOUNT__:log-group:/aws/vendedlogs/states/__STATE_MACHINE__:*"
+      ]
+    },
+    {
+      "Sid": "SetUpWorkflowLogging",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogDelivery",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DescribeResourcePolicies",
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
     }
   ]
 }

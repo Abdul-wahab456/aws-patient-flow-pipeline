@@ -66,3 +66,78 @@ def test_lambda_settings_pass_the_pipeline_settings_as_environment_variables():
         "LAKE_BUCKET": "lake", "FIRST_INGEST_DATE": "2026-11-01", "NUMBER_OF_BATCHES": "4",
     }
     assert settings["Runtime"] == "python3.12" and settings["Handler"] == "handler.lambda_handler"
+
+
+# ---- the Step Functions workflow -----------------------------------------------------------------------------
+CONFIG = {"region": "us-east-1", "lambda_name": "pf-ingest", "glue_job": "pf-bronze-to-silver", "workgroup": "pf-wg"}
+
+
+def workflow():
+    return deploy.state_machine_definition(CONFIG, "123456789012")
+
+
+def test_config_has_defaults_for_the_workgroup_and_the_state_machine():
+    config = deploy.load_config(environ={"LAKE_BUCKET": "b", "SILVER_DATABASE": "s"}, settings_path=Path("none.json"))
+    assert config["workgroup"] == "pf-wg" and config["state_machine"] == "pf-batch-pipeline"
+
+
+def test_workflow_has_no_unfilled_placeholders_and_names_the_right_resources():
+    text = json.dumps(workflow())
+    assert "__" not in text.replace("__init__", "")
+    assert "arn:aws:lambda:us-east-1:123456789012:function:pf-ingest" in text
+    assert '"JobName": "pf-bronze-to-silver"' in text and '"WorkGroup": "pf-wg"' in text
+
+
+def test_workflow_steps_run_in_the_expected_order():
+    states = workflow()["States"]
+    order, current = [], workflow()["StartAt"]
+    while current != "PipelineSucceeded":
+        order.append(current)
+        current = states[current]["Next"]
+    assert order == ["Ingest", "BronzeToSilver", "PrepareDateParameter", "MergeDimPatient", "MergeDimFacility",
+                     "MergeDimPractitioner", "MergeFactEncounter"]       # dimensions first, the fact last
+
+
+def test_every_next_points_to_a_real_state():
+    definition = workflow()
+    states = definition["States"]
+    assert definition["StartAt"] in states
+    for name, state in states.items():
+        targets = [state["Next"]] if "Next" in state else []
+        targets += [catch["Next"] for catch in state.get("Catch", [])]
+        assert all(target in states for target in targets), name
+        assert "Next" in state or state["Type"] in ("Succeed", "Fail"), f"{name} leads nowhere"
+
+
+def test_every_task_sends_errors_to_the_failure_state():
+    for name, state in workflow()["States"].items():
+        if state["Type"] == "Task":
+            assert any(catch["Next"] == "PipelineFailed" and "States.ALL" in catch["ErrorEquals"]
+                       for catch in state["Catch"]), f"{name} does not catch errors"
+
+
+def test_each_merge_gets_exactly_as_many_date_parameters_as_it_has_question_marks():
+    athena_states = {
+        name: state for name, state in workflow()["States"].items()
+        if state.get("Resource", "").endswith("startQueryExecution.sync")
+    }
+    assert len(athena_states) == 4
+    for name, state in athena_states.items():
+        placeholders = state["Parameters"]["QueryString"].count("?")
+        supplied = state["Parameters"]["ExecutionParameters.$"].count("$.sql.date")
+        assert placeholders == supplied >= 1, f"{name}: {placeholders} ? but {supplied} parameters"
+
+
+def test_the_merges_in_the_workflow_are_the_sql_files():
+    states = workflow()["States"]
+    expected_target = {
+        "MergeDimPatient": "dim_patient", "MergeDimFacility": "dim_facility",
+        "MergeDimPractitioner": "dim_practitioner", "MergeFactEncounter": "fact_encounter",
+    }
+    for state_name, table in expected_target.items():
+        assert states[state_name]["Parameters"]["QueryString"].startswith(f"MERGE INTO pf_gold.{table} ")
+
+
+def test_the_glue_step_waits_for_a_busy_job_instead_of_failing():
+    retries = workflow()["States"]["BronzeToSilver"]["Retry"]
+    assert any("Glue.ConcurrentRunsExceededException" in retry["ErrorEquals"] for retry in retries)

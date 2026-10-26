@@ -81,7 +81,7 @@ Hospital visit records (fake, from Synthea, in the FHIR format) arrive as JSON f
 | **IAM** | Who may do what: one role per service, each with only the permissions it needs | `pf-lambda-role`, `pf-glue-role`, `pf-step-functions-role`, `pf-scheduler-role`, `pf-github-deploy-role` |
 | **CloudWatch Logs** | The logs of the Lambda and Glue job | automatic |
 | **Budgets** | Emails you at $5, $20, $50 | `pf-monthly-budget` |
-| **Step Functions** *(Phase 7)* | Runs the steps in order for one batch | `pf-batch-pipeline` |
+| **Step Functions** | Runs the steps in order for one batch: Lambda, Glue job, four merges; stops with an error if one fails | `pf-batch-pipeline` |
 
 ---------------------------------------------------------------------------------------------------
 
@@ -93,7 +93,7 @@ Hospital visit records (fake, from Synthea, in the FHIR format) arrive as JSON f
 | 3 | Load gold | 4 Athena `MERGE` statements, dimensions first, then the fact | silver rows of that date | the 5 gold tables |
 | 4 | Report | Athena views | `fact_encounter` and dimensions | (nothing stored: a view is a query) |
 
-Today you start steps 1–3 by hand (notebooks). **Phase 7** chains them into one workflow; **Phase 10** starts it automatically when a batch arrives.
+**Step Functions** chains steps 1–3 into one workflow that you start with `{"batch": N}`; **Phase 10** will start it automatically when a batch arrives.
 Every step is **idempotent**: running it twice for the same batch gives the same result (no duplicates).
 
 ---------------------------------------------------------------------------------------------------
@@ -118,6 +118,7 @@ git push (main) --> GitHub Actions: "Deploy" workflow
                        - uploads the Glue scripts to  s3://…/glue_scripts/<commit id>/
                        - points the Glue job at that folder
                        - updates the Lambda code and settings
+                       - updates the Step Functions workflow
 ```
 On a branch other than `main` or on a pull request, only the **CI** checks run (no deploy).
 **CI** = Continuous Integration (check every change). **CD** = Continuous Deployment (ship it automatically).

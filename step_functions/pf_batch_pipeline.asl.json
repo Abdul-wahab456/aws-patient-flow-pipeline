@@ -1,0 +1,132 @@
+{
+  "Comment": "Patient-flow pipeline for ONE batch. Input: {\"batch\": N}. Steps: ingest (Lambda) -> bronze to silver (Glue) -> gold merges (Athena).",
+  "StartAt": "Ingest",
+  "States": {
+    "Ingest": {
+      "Type": "Task",
+      "Comment": "Copy landing/batch_NN to bronze. The Lambda returns the batch, its ingest_date and the file count.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "__LAMBDA_ARN__", "Payload.$": "$" },
+      "ResultSelector": {
+        "batch.$": "$.Payload.batch",
+        "ingest_date.$": "$.Payload.ingest_date",
+        "file_count.$": "$.Payload.file_count"
+      },
+      "ResultPath": "$.ingest",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed" }],
+      "Next": "BronzeToSilver"
+    },
+
+    "BronzeToSilver": {
+      "Type": "Task",
+      "Comment": "Flatten the batch into the five silver tables. .sync = wait until the Glue job run has finished.",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": { "JobName": "__GLUE_JOB__", "Arguments": { "--ingest_date.$": "$.ingest.ingest_date" } },
+      "ResultSelector": { "job_run_id.$": "$.Id", "state.$": "$.JobRunState", "execution_seconds.$": "$.ExecutionTime" },
+      "ResultPath": "$.glue",
+      "Retry": [
+        {
+          "Comment": "The job allows one run at a time; wait for another run (another batch) to finish",
+          "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+          "IntervalSeconds": 30, "MaxAttempts": 8, "BackoffRate": 1.5
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed" }],
+      "Next": "PrepareDateParameter"
+    },
+
+    "PrepareDateParameter": {
+      "Type": "Pass",
+      "Comment": "The MERGE statements take the batch date as a quoted text parameter: '2026-11-01'",
+      "Parameters": { "date.$": "States.Format('\\'{}\\'', $.ingest.ingest_date)" },
+      "ResultPath": "$.sql",
+      "Next": "MergeDimPatient"
+    },
+
+    "MergeDimPatient": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "__SQL:merge_dim_patient__",
+        "WorkGroup": "__WORKGROUP__",
+        "ExecutionParameters.$": "States.Array($.sql.date)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        { "ErrorEquals": ["Athena.TooManyRequestsException", "Athena.InternalServerException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 },
+        { "Comment": "e.g. an Iceberg commit conflict when two batches write at the same time", "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed" }],
+      "Next": "MergeDimFacility"
+    },
+
+    "MergeDimFacility": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "__SQL:merge_dim_facility__",
+        "WorkGroup": "__WORKGROUP__",
+        "ExecutionParameters.$": "States.Array($.sql.date)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        { "ErrorEquals": ["Athena.TooManyRequestsException", "Athena.InternalServerException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 },
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed" }],
+      "Next": "MergeDimPractitioner"
+    },
+
+    "MergeDimPractitioner": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "__SQL:merge_dim_practitioner__",
+        "WorkGroup": "__WORKGROUP__",
+        "ExecutionParameters.$": "States.Array($.sql.date)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        { "ErrorEquals": ["Athena.TooManyRequestsException", "Athena.InternalServerException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 },
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed" }],
+      "Next": "MergeFactEncounter"
+    },
+
+    "MergeFactEncounter": {
+      "Type": "Task",
+      "Comment": "Last, because the fact points to the dimensions. This statement has two ? (encounters and conditions).",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "__SQL:merge_fact_encounter__",
+        "WorkGroup": "__WORKGROUP__",
+        "ExecutionParameters.$": "States.Array($.sql.date, $.sql.date)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        { "ErrorEquals": ["Athena.TooManyRequestsException", "Athena.InternalServerException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 },
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed" }],
+      "Next": "PipelineSucceeded"
+    },
+
+    "PipelineSucceeded": {
+      "Type": "Succeed",
+      "OutputPath": "$.ingest"
+    },
+
+    "PipelineFailed": {
+      "Type": "Fail",
+      "ErrorPath": "$.error.Error",
+      "CausePath": "$.error.Cause"
+    }
+  }
+}

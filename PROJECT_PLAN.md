@@ -28,6 +28,7 @@ An end-to-end, code-first data pipeline on AWS that ingests **synthetic hospital
 | 2026-10-26 | **CI built early:** the GitHub Actions workflow `ci.yml` (ruff lint + pytest with coverage + JSON validation) already exists and runs from the first push. The CD part (auto-deploy to AWS) stays in Phase 12 because it needs the CloudFormation stacks of Phase 11. |
 | 2026-10-26 | **Light CD built early (before Phase 6):** `deploy.yml` + `infra/deploy.py` deploy the Glue job and the ingest Lambda after every push to `main`, logging in to AWS with OIDC (no stored keys) and versioning the Glue scripts by commit id. Details: `docs/cd_github_actions.md`. Phase 11/12 later switch it to deploying the CloudFormation stacks. |
 | 2026-10-27 | **Gold layer design changes found by testing on AWS:** `fact_encounter` is partitioned by **year**, not month (the visits span 1924-2026 and Athena allows at most 100 partitions written per query); `dim_date` covers **1900-2030**, not 2015-2027; the doctor key is the NPI (`practitioner_npi`, `dim_practitioner` keyed on `npi`). |
+| 2026-10-27 | **Order:** the event trigger (Phase 10) is built right after Phase 7, before Phases 8-9, so that dropping a batch into `landing/` runs the whole pipeline. |
 
 **Owner:** Jared (data engineer; experienced with Databricks, Delta Lake, Snowflake, Azure; learning AWS Glue).
 
@@ -249,10 +250,10 @@ Each phase: build → verify with CLI → commit to Git → confirm with Jared.
 | 4 | Ingest Lambda (bronze) | ✅ done |
 | 5 | Glue job (bronze to silver) | ✅ done |
 | 6 | Gold layer (Athena + Iceberg) | ✅ done |
-| 7 | Orchestration with Step Functions (started by hand) | next |
+| 7 | Orchestration with Step Functions (started by hand) | ✅ done |
 | 8 | Data quality and notebooks | |
 | 9 | Run all 4 batches, first README | |
-| 10 | **Upgrade A:** new batch starts the pipeline (event-driven) | |
+| 10 | **Upgrade A:** new batch starts the pipeline (event-driven) | next |
 | 11 | **Upgrade B:** infrastructure as CloudFormation YAML | |
 | 12 | **Upgrade C:** CD: GitHub Actions deploys to AWS (CI and a light CD for the Glue job and the Lambda are built and verified; this phase moves it to CloudFormation) | partly done ✅ |
 | 13 | Power BI report (optional) | |
