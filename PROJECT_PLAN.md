@@ -251,9 +251,9 @@ Each phase: build → verify with CLI → commit to Git → confirm with Jared.
 | 5 | Glue job (bronze to silver) | ✅ done |
 | 6 | Gold layer (Athena + Iceberg) | ✅ done |
 | 7 | Orchestration with Step Functions (started by hand) | ✅ done |
-| 8 | Data quality and notebooks | |
+| 8 | Data quality and notebooks | next |
 | 9 | Run all 4 batches, first README | |
-| 10 | **Upgrade A:** new batch starts the pipeline (event-driven) | next |
+| 10 | **Upgrade A:** new batch starts the pipeline (event-driven) | ✅ done |
 | 11 | **Upgrade B:** infrastructure as CloudFormation YAML | |
 | 12 | **Upgrade C:** CD: GitHub Actions deploys to AWS (CI and a light CD for the Glue job and the Lambda are built and verified; this phase moves it to CloudFormation) | partly done ✅ |
 | 13 | Power BI report (optional) | |

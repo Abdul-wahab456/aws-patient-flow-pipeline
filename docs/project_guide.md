@@ -24,7 +24,7 @@ Hospital visit records (fake, from Synthea, in the FHIR format) arrive as JSON f
                                               landing->       flattens        build gold
                                               bronze          JSON -> tables
 
- Step Functions (Phase 7) will run these steps in order for one batch.   Power BI (Phase 13) will read the views.
+ Step Functions runs these steps for one batch; a marker file landing/batch_NN/_SUCCESS starts it (EventBridge).   Power BI (Phase 13) will read the views.
 ```
 
 ---------------------------------------------------------------------------------------------------
@@ -78,9 +78,10 @@ Hospital visit records (fake, from Synthea, in the FHIR format) arrive as JSON f
 | **Glue job** | A Spark program that turns raw JSON into the 5 silver tables | `pf-bronze-to-silver` |
 | **Glue Data Catalog** | The index of tables (names, columns, where the files are). Holds no data | databases `pf_silver`, `pf_gold` |
 | **Athena** | Runs SQL on files in S3 (no server to manage); builds and queries gold | workgroup `pf-wg` (1 GB scan limit per query) |
-| **IAM** | Who may do what: one role per service, each with only the permissions it needs | `pf-lambda-role`, `pf-glue-role`, `pf-step-functions-role`, `pf-scheduler-role`, `pf-github-deploy-role` |
+| **IAM** | Who may do what: one role per service, each with only the permissions it needs | `pf-lambda-role`, `pf-glue-role`, `pf-step-functions-role`, `pf-trigger-role`, `pf-github-deploy-role` |
 | **CloudWatch Logs** | The logs of the Lambda and Glue job | automatic |
 | **Budgets** | Emails you at $5, $20, $50 | `pf-monthly-budget` |
+| **EventBridge** | Watches for the marker file of a finished delivery and starts Step Functions | rule `pf-new-batch-rule` |
 | **Step Functions** | Runs the steps in order for one batch: Lambda, Glue job, four merges; stops with an error if one fails | `pf-batch-pipeline` |
 
 ---------------------------------------------------------------------------------------------------
@@ -93,7 +94,7 @@ Hospital visit records (fake, from Synthea, in the FHIR format) arrive as JSON f
 | 3 | Load gold | 4 Athena `MERGE` statements, dimensions first, then the fact | silver rows of that date | the 5 gold tables |
 | 4 | Report | Athena views | `fact_encounter` and dimensions | (nothing stored: a view is a query) |
 
-**Step Functions** chains steps 1–3 into one workflow that you start with `{"batch": N}`; **Phase 10** will start it automatically when a batch arrives.
+**Step Functions** chains steps 1–3 into one workflow. It starts by itself when a sender writes the marker file `landing/batch_NN/_SUCCESS` (EventBridge), or by hand with `{"batch": N}`.
 Every step is **idempotent**: running it twice for the same batch gives the same result (no duplicates).
 
 ---------------------------------------------------------------------------------------------------
@@ -112,7 +113,7 @@ Every step is **idempotent**: running it twice for the same batch gives the same
 ## 6. CI/CD: what happens when you `git push`
 ```
 git push (main) --> GitHub Actions: "Deploy" workflow
-   job 1  checks    ruff (lint) + pytest (99 tests, incl. Spark). Red = STOP, nothing is deployed.
+   job 1  checks    ruff (lint) + pytest (127 tests, incl. Spark). Red = STOP, nothing is deployed.
    job 2  deploy    logs in to AWS with a short-lived identity (OIDC). No AWS keys are stored in GitHub.
                     infra/deploy.py:
                        - uploads the Glue scripts to  s3://…/glue_scripts/<commit id>/
@@ -176,7 +177,12 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | `ddl/` | `dim_patient`, `dim_facility`, `dim_practitioner`, `fact_encounter`, `dim_date` | Create the gold tables (Iceberg) |
 | `merge/` | `merge_dim_patient`, `merge_dim_facility`, `merge_dim_practitioner`, `merge_fact_encounter` | Upsert one batch into a gold table |
 | `views/` | five `vw_…` files | The KPI views |
-| `sql/dq/`, `step_functions/` | empty (`.gitkeep`) | Reserved for Phase 8 (data-quality checks) and Phase 7 (the workflow definition) |
+| `sql/dq/` | empty (`.gitkeep`) | Reserved for Phase 8 (data-quality checks) |
+
+### `step_functions/`
+| File | What it does |
+|---|---|
+| `pf_batch_pipeline.asl.json` | The workflow: Ingest, BronzeToSilver, four merges, with retries and one failure state. `infra/deploy.py` inserts the merge SQL and deploys it |
 
 ### `infra/` (AWS setup and deploy helpers)
 | File | What it does |
@@ -188,6 +194,7 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | `budget/budget.json` | The $50 monthly budget (the alert rules with your email are not in Git) |
 | `policies/policy_*.json` | **Trust policies**: who may use a role (one per role) |
 | `policies/permissions_*.template.json` | **Permission policies**: what a role may do. `{__PLACEHOLDERS__}` are filled from your settings |
+| `policy_trigger.json`, `permissions_trigger.template.json` | The role that lets EventBridge start the workflow (and nothing else) |
 
 ### `config/`
 | File | What it is |
@@ -206,8 +213,10 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | `bronze_to_silver_job` | Deploys and runs the Glue job and checks silver against the source files |
 | `github_deploy_role` | Creates the GitHub login trust and the deploy role; tests 14 permissions |
 | `gold_layer` | Creates the gold tables, runs the merges, creates the views, checks everything against the source |
+| `step_functions_pipeline` | Deploys the workflow and tests it: a normal run, a bad batch, two batches at once |
+| `event_trigger` | Creates the folder trigger (bucket events, EventBridge rule) and tests it with real deliveries |
 
-### `tests/` (99 tests, run by `pytest`, on your laptop and on GitHub)
+### `tests/` (127 tests, run by `pytest`, on your laptop and on GitHub)
 | File | Tests |
 |---|---|
 | `test_ingest_handler.py` | The Lambda logic with a fake S3 |
@@ -225,6 +234,7 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | See who I am in AWS | `aws sts get-caller-identity` |
 | Ingest a batch | invoke the Lambda with `{"batch": N}` (see the `ingest_lambda` notebook) |
 | Transform a batch to silver | start the Glue job with `--ingest_date 2026-11-0N` (see `bronze_to_silver_job`) |
+| Process a batch end to end | write `landing/batch_NN/_SUCCESS` containing `{"files": <count>}` after uploading the files (or start `pf-batch-pipeline` with `{"batch": N}`) |
 | Load a batch into gold | `run_sql_file("sql/gold/merge/…", ingest_date=…)` (see `gold_layer`) |
 | Deploy my code | `git push` to `main` (or `python infra/deploy.py --version <name>` by hand) |
 | Ask a question about the data | Athena console → workgroup `pf-wg` → database `pf_gold` |

@@ -86,7 +86,8 @@ def aws_json(*args):
     result = subprocess.run([AWS_EXE, *args], capture_output=True, text=True, cwd=ROOT, env=ENV)
     if result.returncode != 0:
         raise RuntimeError(f"aws {' '.join(args[:2])} failed: {result.stderr.strip()}")
-    return json.loads(result.stdout)
+    # Some commands print nothing at all when there is nothing to report (for example a bucket without notifications)
+    return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
 def whoami():

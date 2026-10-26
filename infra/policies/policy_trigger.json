@@ -3,7 +3,7 @@
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": { "Service": "scheduler.amazonaws.com" },
+      "Principal": { "Service": "events.amazonaws.com" },
       "Action": "sts:AssumeRole"
     }
   ]
