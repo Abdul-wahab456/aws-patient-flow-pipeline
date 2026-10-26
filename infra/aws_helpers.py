@@ -181,6 +181,8 @@ def render_policy(filename):
         "__DB_SILVER__": SETTINGS["glue_databases"]["silver"],
         "__DB_GOLD__": SETTINGS["glue_databases"]["gold"],
         "__REPOSITORY__": SETTINGS.get("github_repository", ""),
+        "__GITHUB_SUBJECT__": SETTINGS.get(
+            "github_subject", f"repo:{SETTINGS.get('github_repository', '')}:ref:refs/heads/main"),
     }
     text = (ROOT / "infra" / "policies" / filename).read_text()
     for placeholder, value in placeholders.items():

@@ -31,7 +31,9 @@ GitHub Actions: deploy.yml
 ## How the login works (no stored keys)
 1. When a workflow runs, GitHub can issue it a **signed token** that says who it is: for example "repository `Abdul-wahab456/aws-patient-flow-pipeline`, branch `main`".
 2. AWS has an **OIDC identity provider** for GitHub, so it can check that signature.
-3. The role `pf-github-deploy-role` has a **trust policy** that accepts the token only if its subject is exactly `repo:<owner>/<repository>:ref:refs/heads/main`. A different repository, a fork, or another branch is refused.
+3. The role `pf-github-deploy-role` has a **trust policy** that accepts the token only if its subject is exactly the value of `github_subject` in `config/settings.json`: `repo:<owner>@<owner id>/<repository>@<repository id>:ref:refs/heads/main`. A different repository, a fork, or another branch is refused. The numeric ids make the rule stronger than the name alone: a deleted repository's name can be taken by someone else, its id cannot.
+
+   > **Lesson from the first real run:** the first version of the rule used the plain form `repo:<owner>/<repository>:ref:refs/heads/main`. GitHub's real token has the ids in it, so AWS answered `Not authorized to perform sts:AssumeRoleWithWebIdentity`. The exact subject GitHub sent was read from AWS's audit log (CloudTrail: `aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity`, field `userIdentity.userName`) and the rule was corrected. The same command is the way to diagnose any future login failure. Audit-log entries can take a few minutes to appear.
 4. The action `aws-actions/configure-aws-credentials` exchanges the token for **temporary** AWS credentials (about an hour). Nothing permanent exists that could leak.
 
 The job needs `permissions: id-token: write` to ask GitHub for the token. The CI job has `contents: read` only.
