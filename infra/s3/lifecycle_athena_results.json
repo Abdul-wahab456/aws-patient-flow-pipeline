@@ -1,0 +1,10 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-athena-results-after-7-days",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "Expiration": { "Days": 7 }
+    }
+  ]
+}

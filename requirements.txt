@@ -4,3 +4,6 @@ pandas
 matplotlib
 jupyter
 pytest
+ruff
+pytest-cov
+pyspark==3.5.4

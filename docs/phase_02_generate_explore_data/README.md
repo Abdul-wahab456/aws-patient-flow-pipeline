@@ -154,7 +154,7 @@ A second run without `--overwrite` was refused with exit code 1, as designed.
 `data/` is gitignored, so batches are never pushed to GitHub; anyone can recreate them with the Synthea command + this script.
 
 ### Step 5 — Exploration notebook
-`notebooks/01_explore_raw_fhir.ipynb` answers, with code and charts: what files exist, what a bundle looks like, which resource types exist, which encounter classes exist, how references work, whether the silver columns can be filled, whether keys join, and whether the batches are correct. It is saved **with its outputs**, so it can be read on GitHub without running it.
+`notebooks/source_data_analysis.ipynb` answers, with code and charts: what files exist, what a bundle looks like, which resource types exist, which encounter classes exist, how references work, whether the silver columns can be filled, whether keys join, and whether the batches are correct. It is saved **with its outputs**, so it can be read on GitHub without running it.
 
 Key results from the notebook:
 - Joins: encounter→patient 100%, encounter→organization 100%, encounter→practitioner **by NPI 100% / by uuid 0%**, condition→encounter 100%.
@@ -164,7 +164,7 @@ Key results from the notebook:
 
 **How to run it** (VS Code: open the notebook, choose the `.venv` kernel top-right, *Run All*). From a terminal:
 ```powershell
-python -m nbconvert --to notebook --execute --inplace notebooks\01_explore_raw_fhir.ipynb
+python -m nbconvert --to notebook --execute --inplace notebooks\source_data_analysis.ipynb
 ```
 **Gotcha we hit (and what it really was):** when the notebook was executed with the venv's Python *without activating the venv*, `python -m jupyter nbconvert ...` failed with `No module named 'jupyter_client'`. The `jupyter` launcher searches `PATH` for a `jupyter-nbconvert` program, and with the venv inactive the first match belonged to a *different* Python installation that lacks our packages. This is **not** a Jupyter problem: with the venv activated (`(.venv)` in the prompt), `.venv\Scripts` is first on `PATH` and `jupyter nbconvert` works. `python -m nbconvert` is a safer habit because it always uses the Python you call it with.
 

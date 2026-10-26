@@ -1,13 +1,17 @@
 {
   "region": "us-east-1",
-  "lake_bucket": "jared-patientflow-lake-<suffix>",
-  "athena_results_bucket": "jared-athena-results-2026",
-  "glue_databases": { "silver": "pf_silver", "gold": "pf_gold" },
+  "lake_bucket": "patientflow-datalake-<suffix>",
+  "athena_results_bucket": "patientflow-athena-query-results-<suffix>",
+  "glue_databases": {
+    "silver": "pf_silver",
+    "gold": "pf_gold"
+  },
   "athena_workgroup": "pf-wg",
   "lambda_name": "pf-ingest",
   "glue_job_name": "pf-bronze-to-silver",
-  "state_machine_name": "pf-daily-pipeline",
-  "schedule_name": "pf-daily-schedule",
+  "state_machine_name": "pf-batch-pipeline",
   "first_ingest_date": "2026-11-01",
-  "number_of_batches": 10
+  "number_of_batches": 4,
+  "trigger_rule_name": "pf-new-batch-rule",
+  "github_repository": "Abdul-wahab456/aws-patient-flow-pipeline"
 }

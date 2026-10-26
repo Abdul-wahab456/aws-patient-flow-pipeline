@@ -123,6 +123,8 @@ Class meanings: **AMB** ambulatory (outpatient visit), **EMER** emergency, **IMP
 
 **Finding that affects the design:** encounters identify the doctor by **NPI**, but the Practitioner record has its own uuid `id`. So `encounter.practitioner_id` holds an NPI and must be joined to `practitioner.npi`, not to `practitioner.practitioner_id`. Decision needed in Phase 5/6: key the practitioner dimension on NPI, or look the uuid up through the NPI.
 
+**Decision taken in Phase 5:** the silver `encounter` column is named **`practitioner_npi`** (not `practitioner_id`) and joins to `practitioner.npi`. Timestamps are stored as UTC instants.
+
 ## 5. Things to watch for in later phases
 
 1. **Time zones.** Timestamps carry an offset, and the offsets in this data are `+05:00` (10,723), `+06:00` (106), `+05:30` (35) and `+06:30` (12). Spark converts such strings using its session time zone; Phase 5 must set this on purpose (e.g. UTC) so `los_hours` is computed consistently.

@@ -1,0 +1,7 @@
+# Only what the automatic checks on GitHub need (the full list is in requirements.txt).
+# Versions are pinned so a new release of a tool cannot suddenly fail the build.
+boto3==1.43.117
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.17.2
+pyspark==3.5.4

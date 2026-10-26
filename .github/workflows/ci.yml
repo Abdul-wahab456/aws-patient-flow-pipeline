@@ -1,0 +1,47 @@
+name: CI
+
+# Lint and tests. When does it run?
+#  - on every push to a branch other than main, and on every pull request
+#  - on a push to main it is called by deploy.yml, so the code is checked before it is deployed
+#  - by hand from the Actions tab
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    # The job only needs to read the code. It gets no AWS access and no secrets.
+    permissions:
+      contents: read
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      # PySpark (used by the silver tests) needs Java
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install the tools
+        run: pip install -r requirements-ci.txt
+
+      # Finds mistakes (unused or undefined names, likely bugs) and style problems
+      - name: Lint with ruff
+        run: python -m ruff check .
+
+      # Runs every test in tests/ and prints which lines of the code the tests cover
+      - name: Unit tests with pytest
+        run: python -m pytest

@@ -1,0 +1,21 @@
+# Settings for the code-quality tools. Run them from the project root:
+#   python -m ruff check .       # lint: finds mistakes and style problems
+#   python -m pytest             # unit tests (with coverage, see addopts)
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["build", "output", "data"]
+
+[tool.ruff.lint]
+# E/W = pycodestyle errors and warnings, F = pyflakes (unused names, undefined names),
+# I = import order, B = bugbear (likely bugs)
+select = ["E", "F", "I", "B", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebooks import our helper module after adding its folder to sys.path (E402),
+# print long command lines (E501) and keep imports grouped by purpose (I001)
+"*.ipynb" = ["E402", "E501", "I001"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --cov=handler --cov=fhir_utils --cov-report=term-missing"

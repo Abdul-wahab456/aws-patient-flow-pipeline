@@ -1,0 +1,49 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListScriptsFolder",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::__LAKE__",
+      "Condition": { "StringLike": { "s3:prefix": ["glue_scripts/*"] } }
+    },
+    {
+      "Sid": "UploadGlueScripts",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::__LAKE__/glue_scripts/*"
+    },
+    {
+      "Sid": "ManageTheGlueJob",
+      "Effect": "Allow",
+      "Action": ["glue:GetJob", "glue:CreateJob", "glue:UpdateJob", "glue:TagResource"],
+      "Resource": "arn:aws:glue:__REGION__:__ACCOUNT__:job/__GLUE_JOB__"
+    },
+    {
+      "Sid": "UpdateTheIngestLambda",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration"
+      ],
+      "Resource": "arn:aws:lambda:__REGION__:__ACCOUNT__:function:__LAMBDA__"
+    },
+    {
+      "Sid": "HandTheGlueRoleToGlue",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/pf-glue-role",
+      "Condition": { "StringEquals": { "iam:PassedToService": "glue.amazonaws.com" } }
+    },
+    {
+      "Sid": "HandTheLambdaRoleToLambda",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/pf-lambda-role",
+      "Condition": { "StringEquals": { "iam:PassedToService": "lambda.amazonaws.com" } }
+    }
+  ]
+}

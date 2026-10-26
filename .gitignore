@@ -6,6 +6,9 @@ config/settings.json
 infra/budget/notifications.json
 
 # ---- Python ----
+.pytest_cache/
+.ruff_cache/
+.coverage
 .venv/
 __pycache__/
 *.pyc
@@ -18,6 +21,8 @@ output/
 *.jar
 
 # ---- Build artifacts ----
+# Zip files and test output written by the deploy notebooks
+build/
 # Lambda deployment packages
 *.zip
 
