@@ -37,7 +37,7 @@ def assign_to_batches(patient_files, n_batches):
     """Round-robin: file i goes to batch (i % n_batches)."""
     batches = [[] for _ in range(n_batches)]
     for i, f in enumerate(patient_files):
-        batches[i % n_batches].append(f)
+        batches[i % n_batches].append(f)       # file 0 -> batch 1, file 1 -> batch 2, ..., then round again
     return batches
 
 

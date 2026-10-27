@@ -18,4 +18,6 @@ select = ["E", "F", "I", "B", "W"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# lets the tests write "from infra.shared import settings" without touching sys.path
+pythonpath = ["."]
 addopts = "-q --cov=handler --cov=fhir_utils --cov-report=term-missing"

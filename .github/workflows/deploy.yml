@@ -51,8 +51,8 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      # The Git commit id names this deployment. stacks.py deploys the foundation stack, uploads the code of this
+      # The Git commit id names this deployment. infra/github_actions/deploy_stacks.py deploys the foundation stack, uploads the code of this
       # commit (Glue scripts, Lambda zip, workflow definition) and deploys the pipeline stack, which points at it.
       # CloudFormation creates the resources as the CloudFormation role; the login role can only hand over to it.
       - name: Deploy the CloudFormation stacks
-        run: python infra/stacks.py --version "${{ github.sha }}" --role-arn "${{ vars.AWS_CLOUDFORMATION_ROLE_ARN }}"
+        run: python -m infra.github_actions.deploy_stacks --version "${{ github.sha }}" --role-arn "${{ vars.AWS_CLOUDFORMATION_ROLE_ARN }}"

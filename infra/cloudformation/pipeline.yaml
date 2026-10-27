@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Patient-flow pipeline: the ingest Lambda, the Glue job, the Step Functions workflow and the EventBridge rule that
   starts it when a batch is complete (landing/batch_NN/_SUCCESS). Needs the foundation stack first.
-  The code is not inside this template: infra/stacks.py uploads it to S3 under the deployment version
+  The code is not inside this template: infra/github_actions/deploy_stacks.py uploads it to S3 under the deployment version
   and this template points at it, so every deployment names the exact code (Git commit) it runs.
 
 Parameters:

@@ -47,4 +47,4 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Release the batch and wait for the run
-        run: python infra/release_batch.py --batch "$BATCH"
+        run: python -m infra.github_actions.release_batch --batch "$BATCH"

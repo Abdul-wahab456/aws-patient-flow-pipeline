@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Patient-flow pipeline, foundation stack: the two S3 buckets, the Glue catalog databases, the Athena workgroup
-  and the four IAM roles the pipeline runs as. The permissions are the ones tested in notebooks/iam_roles.ipynb
-  (infra/policies/*.json); tests/test_cloudformation.py checks that both copies stay identical.
+  and the four IAM roles the pipeline runs as. Each role gets only what its job needs; the tests in
+  tests/infra/cloudformation/test_templates.py check this.
 
 Parameters:
   ProjectPrefix:
@@ -19,7 +19,7 @@ Parameters:
 
 Resources:
   # ---------------------------------------------------------------- S3
-  # Retain: deleting the stack never deletes the data. infra/teardown.py empties and deletes the buckets on purpose.
+  # Retain: deleting the stack never deletes the data. infra/operations/teardown.py empties and deletes the buckets on purpose.
   LakeBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain

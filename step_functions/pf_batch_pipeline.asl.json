@@ -120,7 +120,7 @@
 
     "DataQualityChecks": {
       "Type": "Task",
-      "Comment": "Run all checks in sql/dq in ONE query. It returns the names of the failing checks, or OK.",
+      "Comment": "Run all checks in sql/data_quality_checks in ONE query. It returns the names of the failing checks, or OK.",
       "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
       "Parameters": {
         "QueryString": "__SQL_DQ__",
