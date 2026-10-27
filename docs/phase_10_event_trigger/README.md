@@ -43,7 +43,7 @@ A batch has 34–37 files. A trigger on "a file arrived" would start the pipelin
 - **Role for the target**: EventBridge needs permission to start the workflow. `pf-trigger-role` can start that one workflow and nothing else.
 
 ## Tests before AWS
-37 Lambda tests with a fake S3. New ones: batch number taken from the marker key; keys that must be rejected (a data file, wrong folder, one-digit batch, nested folder, batch 5 or 0); marker content must be JSON like `{"files": 37}` (not JSON, `{}`, 0, text, `true` are rejected); the marker is neither counted nor copied; a count different from the announced one is rejected **before anything is copied**; a marker from another bucket is refused; `{"batch": N}` still works.
+37 Lambda tests with a fake S3. New ones: batch number taken from the marker key; keys that must be rejected (a data file, wrong folder, one-digit batch, nested folder, batch 100 or 0); marker content must be JSON like `{"files": 37}` (not JSON, `{}`, 0, text, `true` are rejected); the marker is neither counted nor copied; a count different from the announced one is rejected **before anything is copied**; a marker from another bucket is refused; `{"batch": N}` still works.
 
 ## Tests on AWS (`event_trigger.ipynb`)
 | Test | Result |
@@ -69,6 +69,14 @@ To run a batch **again**, write its marker again: a new "created" event, a new r
 - **Switch it off:** `aws events disable-rule --name pf-new-batch-rule` (and `enable-rule` to switch it on). While disabled, markers start nothing.
 - **Cost:** S3 events to EventBridge and the rule are free at this volume. The pipeline run costs about $0.03 (Glue).
 - **Not part of the GitHub deployment yet.** The Lambda is deployed by `infra/deploy.py` (so a push updates it), but the bucket setting, the rule and the target were created by this notebook. Phase 11 moves them into CloudFormation.
+
+## Adding a new batch (no code change, no setting, no deployment)
+There is **no fixed number of batches**. A batch is any folder named `landing/batch_NN` with two digits, `01` to `99`.
+1. Upload the data files of the new batch to `landing/batch_05/` (and so on for 06, 07, ...). Nothing starts yet: files alone do not start the pipeline.
+2. Release it: **GitHub → Actions → Release batch → Run workflow → type `5`**. The workflow counts the files, writes `landing/batch_05/_SUCCESS` with that count (the last file, the "delivery is complete" slip) and waits for the run. A sender can also write the marker itself: `{"files": <number of data files>}`.
+3. EventBridge sees the marker and starts the pipeline for that batch. The ingest date is the first ingest date plus one day per batch (batch 5 = 2026-11-05).
+
+Without the marker nothing runs, on purpose: a half-uploaded batch must never start the pipeline. A batch that was already processed runs again only if its marker is written again. A number outside 1-99 or a folder such as `batch_5` (one digit) is rejected by the Lambda with a clear error.
 
 ## Done when
 - Releasing a batch runs the whole flow with no manual command. ✅

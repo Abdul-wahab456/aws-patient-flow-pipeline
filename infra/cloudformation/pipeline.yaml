@@ -21,11 +21,7 @@ Parameters:
   FirstIngestDate:
     Type: String
     Default: "2026-11-01"
-    Description: Ingest date of batch 1; batch N gets this date plus N-1 days
-  NumberOfBatches:
-    Type: String
-    Default: "4"
-    Description: How many batches the ingest Lambda accepts
+    Description: Ingest date of batch 1; batch N gets this date plus N-1 days (batches 1-99, no other limit)
 
 Resources:
   # ---------------------------------------------------------------- ingest Lambda
@@ -53,7 +49,6 @@ Resources:
         Variables:
           LAKE_BUCKET: { "Fn::ImportValue": !Sub "${FoundationStackName}-LakeBucket" }
           FIRST_INGEST_DATE: !Ref FirstIngestDate
-          NUMBER_OF_BATCHES: !Ref NumberOfBatches
       Tags:
         - { Key: project, Value: patient-flow }
 

@@ -31,7 +31,6 @@ jobs:
       LAKE_BUCKET: ${{ vars.LAKE_BUCKET }}
       RESULTS_BUCKET: ${{ vars.RESULTS_BUCKET }}
       SILVER_DATABASE: ${{ vars.SILVER_DATABASE }}
-      NUMBER_OF_BATCHES: ${{ vars.NUMBER_OF_BATCHES }}
     steps:
       - name: Get the code
         uses: actions/checkout@v4

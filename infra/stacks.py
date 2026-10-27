@@ -55,7 +55,6 @@ def pipeline_parameters(config, version):
         "FoundationStackName": stack_names(config["project_prefix"])["foundation"],
         "DeploymentVersion": version,
         "FirstIngestDate": config["first_ingest_date"],
-        "NumberOfBatches": config["number_of_batches"],
     }
 
 

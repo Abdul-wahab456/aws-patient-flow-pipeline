@@ -13,11 +13,11 @@ import deploy  # noqa: E402
 
 def test_config_comes_from_environment_variables():
     config = deploy.load_config(
-        environ={"LAKE_BUCKET": "my-lake", "SILVER_DATABASE": "my_silver", "NUMBER_OF_BATCHES": "7"},
+        environ={"LAKE_BUCKET": "my-lake", "SILVER_DATABASE": "my_silver"},
         settings_path=Path("does-not-exist.json"),
     )
     assert config["lake_bucket"] == "my-lake" and config["silver_database"] == "my_silver"
-    assert config["number_of_batches"] == "7"
+    assert "number_of_batches" not in config            # there is no fixed number of batches
     assert config["glue_job"] == "pf-bronze-to-silver"      # default
     assert config["region"] == "us-east-1"
 
@@ -26,14 +26,12 @@ def test_config_falls_back_to_the_settings_file(tmp_path):
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps({
         "region": "eu-west-1", "lake_bucket": "file-lake", "glue_databases": {"silver": "file_silver"},
-        "number_of_batches": 4,
     }))
     config = deploy.load_config(environ={"LAKE_BUCKET": "env-lake"}, settings_path=settings)
 
     assert config["lake_bucket"] == "env-lake"              # the environment wins
     assert config["silver_database"] == "file_silver"       # missing in the environment: taken from the file
     assert config["region"] == "eu-west-1"
-    assert config["number_of_batches"] == "4"
 
 
 def test_config_fails_clearly_when_a_required_setting_is_missing():
@@ -59,11 +57,11 @@ def test_lambda_package_holds_handler_py_at_its_root():
 
 
 def test_lambda_settings_pass_the_pipeline_settings_as_environment_variables():
-    config = {"lake_bucket": "lake", "first_ingest_date": "2026-11-01", "number_of_batches": "4"}
+    config = {"lake_bucket": "lake", "first_ingest_date": "2026-11-01"}
     settings = deploy.lambda_settings("arn:aws:iam::1:role/r", config)
 
     assert settings["Environment"]["Variables"] == {
-        "LAKE_BUCKET": "lake", "FIRST_INGEST_DATE": "2026-11-01", "NUMBER_OF_BATCHES": "4",
+        "LAKE_BUCKET": "lake", "FIRST_INGEST_DATE": "2026-11-01",
     }
     assert settings["Runtime"] == "python3.12" and settings["Handler"] == "handler.lambda_handler"
 

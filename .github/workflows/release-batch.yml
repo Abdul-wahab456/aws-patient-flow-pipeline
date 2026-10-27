@@ -1,16 +1,15 @@
 name: Release batch
 
-# Starts the pipeline for one batch that is already in landing/: writes landing/batch_NN/_SUCCESS (with the number of
-# files) and waits for the run that EventBridge starts. Run it from the Actions tab: Release batch > Run workflow.
+# Starts the pipeline for one batch that is already in landing/ (any number from 1 to 99, no fixed list):
+# writes landing/batch_NN/_SUCCESS (with the number of files) and waits for the run that EventBridge starts. Run it from the Actions tab: Release batch > Run workflow.
 # A deployment (deploy.yml) never loads data by itself; loading data is this separate, deliberate click.
 on:
   workflow_dispatch:
     inputs:
       batch:
-        description: Batch number to release
+        description: Batch number to release (1-99). The batch must already be uploaded to landing/batch_NN/
         required: true
-        type: choice
-        options: ["1", "2", "3", "4"]
+        type: string
 
 # One release at a time (two runs would merge into the same tables at once)
 concurrency:
@@ -27,6 +26,8 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION }}
       LAKE_BUCKET: ${{ vars.LAKE_BUCKET }}
       SILVER_DATABASE: ${{ vars.SILVER_DATABASE }}
+      # The typed value goes through an environment variable, never straight into the shell command
+      BATCH: ${{ inputs.batch }}
     steps:
       - name: Get the code
         uses: actions/checkout@v4
@@ -46,4 +47,4 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Release the batch and wait for the run
-        run: python infra/release_batch.py --batch "${{ inputs.batch }}"
+        run: python infra/release_batch.py --batch "$BATCH"

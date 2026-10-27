@@ -5,16 +5,38 @@
 EventBridge sees the marker and starts the workflow by itself. This script waits for that run and exits with an
 error if it does not end SUCCEEDED. GitHub Actions runs it from the "Release batch" workflow (one click per batch).
 
+Any batch from 1 to 99 can be released: there is no fixed number of batches. A new batch needs no setting,
+no code change and no deployment: upload its files to landing/batch_NN/, then release it.
+
 Settings (same as infra/deploy.py): LAKE_BUCKET, PROJECT_PREFIX, AWS_REGION or config/settings.json.
 """
 import argparse
 import json
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 import boto3
 import deploy
+
+
+def batch_number(text):
+    """A batch number typed by a person (command line or GitHub form): a whole number from 1 to 99."""
+    if not re.fullmatch(r"\d{1,2}", str(text).strip()) or not 1 <= int(text) <= 99:
+        raise argparse.ArgumentTypeError(f"batch must be a number from 1 to 99, got {text!r}")
+    return int(text)
+
+
+def list_batches(s3, bucket):
+    """The batch numbers that exist in landing/ (folders named batch_NN), in ascending order."""
+    batches = set()
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="landing/", Delimiter="/"):
+        for prefix in page.get("CommonPrefixes", []):
+            match = re.fullmatch(r"landing/batch_(\d{2})/", prefix["Prefix"])
+            if match:
+                batches.add(int(match.group(1)))
+    return sorted(batches)
 
 
 def count_batch_files(s3, bucket, batch):
@@ -69,7 +91,7 @@ def release_batch(session, bucket, batch, state_machine_arn, announced_files=Non
 
 def main():
     parser = argparse.ArgumentParser(description="Release a batch and wait for the pipeline run it starts.")
-    parser.add_argument("--batch", type=int, required=True, help="batch number, e.g. 2")
+    parser.add_argument("--batch", type=batch_number, required=True, help="batch number, 1 to 99")
     args = parser.parse_args()
 
     config = deploy.load_config()

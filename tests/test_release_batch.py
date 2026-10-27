@@ -1,4 +1,5 @@
 """Tests for infra/release_batch.py with fake S3 and Step Functions clients. No AWS needed."""
+import argparse
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -115,3 +116,42 @@ def test_runs_that_started_before_the_marker_are_ignored(monkeypatch):
     old = {"executionArn": "arn:old", "startDate": datetime.now(timezone.utc) - timedelta(hours=1)}
     sfn = FakeStepFunctions([old, started_just_now("new")])
     assert rb.find_started_run(sfn, "arn:machine", datetime.now(timezone.utc))["executionArn"] == "arn:new"
+
+
+# ---- any batch number, no fixed list --------------------------------------------------------------------------
+@pytest.mark.parametrize("text", ["1", "4", "5", "05", "6", "42", "99", " 7 "])
+def test_every_batch_number_from_1_to_99_is_accepted(text):
+    assert rb.batch_number(text) == int(text)
+
+
+@pytest.mark.parametrize("text", ["0", "100", "-1", "five", "", "1.5", "3; rm -rf /", "001"])
+def test_other_batch_numbers_and_text_are_refused(text):
+    with pytest.raises(argparse.ArgumentTypeError, match="1 to 99"):
+        rb.batch_number(text)
+
+
+class FakeListing:
+    def __init__(self, prefixes):
+        self.prefixes = prefixes
+
+    def get_paginator(self, name):
+        listing = self
+
+        class Paginator:
+            def paginate(self, Bucket, Prefix, Delimiter):  # noqa: N803 (boto3 spelling)
+                assert (Prefix, Delimiter) == ("landing/", "/")
+                yield {"CommonPrefixes": [{"Prefix": prefix} for prefix in listing.prefixes]}
+        return Paginator()
+
+
+def test_the_batches_in_landing_are_found_in_ascending_order_whatever_their_number():
+    prefixes = ["landing/batch_10/", "landing/batch_02/", "landing/batch_05/", "landing/batch_01/",
+                "landing/batch_5/", "landing/batch_100/", "landing/other/", "landing/batch_07x/"]
+    assert rb.list_batches(FakeListing(prefixes), "lake") == [1, 2, 5, 10]
+
+
+def test_a_new_batch_is_released_with_no_setting_that_names_how_many_batches_exist():
+    s3 = FakeS3(["landing/batch_05/a.json", "landing/batch_05/b.json"])
+    run = rb.release_batch(FakeSession(s3, FakeStepFunctions([started_just_now()])), "lake", 5, "arn:machine")
+    assert s3.written[0]["Key"] == "landing/batch_05/_SUCCESS" and json.loads(s3.written[0]["Body"]) == {"files": 2}
+    assert run["status"] == "SUCCEEDED"

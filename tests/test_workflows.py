@@ -36,10 +36,13 @@ def test_no_workflow_stores_an_aws_key():
         assert "AWS_ACCESS_KEY_ID" not in text and "AWS_SECRET_ACCESS_KEY" not in text, path.name
 
 
-def test_release_batch_is_started_by_hand_for_one_of_the_four_batches_and_never_two_at_once():
+def test_release_batch_is_started_by_hand_for_any_batch_number_and_never_two_at_once():
     workflow = load("release-batch.yml")
     inputs = workflow["on"]["workflow_dispatch"]["inputs"]
     assert list(workflow["on"]) == ["workflow_dispatch"]
-    assert inputs["batch"]["options"] == ["1", "2", "3", "4"]
+    assert inputs["batch"]["type"] == "string" and "options" not in inputs["batch"]     # a number box, not a fixed list
     assert workflow["concurrency"]["cancel-in-progress"] is False
     assert any("release_batch.py --batch" in command for command in run_commands(workflow))
+    # the typed text reaches the script through an environment variable, never inside the shell command itself
+    assert all("inputs.batch" not in command for command in run_commands(workflow))
+    assert workflow["jobs"]["release"]["env"]["BATCH"] == "${{ inputs.batch }}"

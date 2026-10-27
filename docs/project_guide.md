@@ -120,7 +120,7 @@ git push (main) --> GitHub Actions: "Deploy" workflow
                        - deploys the CloudFormation stack pf-foundation (buckets, catalog, workgroup, roles)
                        - uploads the code of this commit: glue_scripts/<commit id>/ and artifacts/<commit id>/
                        - deploys the stack pf-pipeline (Lambda, Glue job, workflow, trigger rule), which points at that code
-Actions tab --> "Release batch" workflow (pick batch 1-4): writes the _SUCCESS marker and waits for the run
+Actions tab --> "Release batch" workflow (type a batch number, 1-99): writes the _SUCCESS marker and waits for the run
 ```
 On a branch other than `main` or on a pull request, only the **CI** checks run (no deploy).
 **CI** = Continuous Integration (check every change). **CD** = Continuous Deployment (ship it automatically).
@@ -226,7 +226,7 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | `step_functions_pipeline` | Deploys the workflow and tests it: a normal run, a bad batch, two batches at once |
 | `data_quality` | Results of the 14 checks for every batch; proves they can fail (plants a bad row, runs the workflow, removes it) |
 | `kpi_analysis` | Five charts from the five KPI views |
-| `run_batches` | Releases the 4 batches through the trigger, one at a time, and checks the gold tables, quality checks and KPI views |
+| `run_batches` | Releases every batch found in `landing/` through the trigger, one at a time, and checks the gold tables, quality checks and KPI views |
 | `cloudformation_stacks` | Checks the templates, retires the hand-built resources, deploys the 3 stacks, checks them (19 permission checks), reloads the data |
 | `event_trigger` | Creates the folder trigger (bucket events, EventBridge rule) and tests it with real deliveries |
 
@@ -255,6 +255,6 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | Process a batch end to end | write `landing/batch_NN/_SUCCESS` containing `{"files": <count>}` after uploading the files (or start `pf-batch-pipeline` with `{"batch": N}`) |
 | Load a batch into gold | `run_sql_file("sql/gold/merge/…", ingest_date=…)` (see `gold_layer`) |
 | Deploy my code | `git push` to `main` (or `python infra/stacks.py --version <name> --role-arn <CloudFormation role>` by hand) |
-| Load a batch | Actions tab > Release batch, or `notebooks/run_batches.ipynb` |
+| Load a batch | Actions tab > Release batch (type the number), or `notebooks/run_batches.ipynb`. **A new batch: upload its files to `landing/batch_NN/`, then release it. No code or setting changes** |
 | Delete everything | `python infra/teardown.py --plan`, then `--delete-everything` |
 | Ask a question about the data | Athena console → workgroup `pf-wg` → database `pf_gold` |

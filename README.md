@@ -116,7 +116,7 @@ Prerequisites: an AWS account, the AWS CLI configured for `us-east-1`, Python 3.
 2. Copy `config/settings.example.json` to `config/settings.json` and fill in your bucket names and GitHub repository.
 3. Generate and split the data: `data_generation/` (Synthea, seed 42) – see [docs/phase_02_generate_explore_data](docs/phase_02_generate_explore_data/README.md).
 4. Deploy: run `notebooks/cloudformation_stacks.ipynb` (or, once the CI/CD stack exists, push to `main`).
-5. Load: run `notebooks/run_batches.ipynb`. It releases the four batches one at a time and checks the results.
+5. Load: run `notebooks/run_batches.ipynb`. It releases every batch in `landing/` one at a time and checks the results. **A new batch** needs no code change: upload its files to `landing/batch_05/`, then run the *Release batch* workflow with `5` (it writes the `_SUCCESS` marker and the pipeline starts by itself).
 6. Look: `notebooks/kpi_analysis.ipynb`, or query the views in Athena (`pf_gold.vw_…`, workgroup `pf-wg`).
 7. Remove everything: `python infra/teardown.py --plan`, then `--delete-everything` ([docs/phase_14_teardown](docs/phase_14_teardown/README.md)).
 

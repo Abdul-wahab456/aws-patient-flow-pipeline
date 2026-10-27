@@ -11,7 +11,6 @@
   "glue_job_name": "pf-bronze-to-silver",
   "state_machine_name": "pf-batch-pipeline",
   "first_ingest_date": "2026-11-01",
-  "number_of_batches": 4,
   "trigger_rule_name": "pf-new-batch-rule",
   "github_repository": "Abdul-wahab456/aws-patient-flow-pipeline",
   "github_subject": "repo:Abdul-wahab456@177129627/aws-patient-flow-pipeline@1429867764:ref:refs/heads/main"

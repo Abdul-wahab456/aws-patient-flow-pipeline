@@ -15,7 +15,7 @@ push to main ──► deploy.yml
                                      1. deploy stack pf-foundation   (buckets, catalog, workgroup, roles)
                                      2. upload the code of this commit: glue_scripts/<commit>/, artifacts/<commit>/
                                      3. deploy stack pf-pipeline     (Lambda, Glue job, workflow, trigger rule)
-Actions tab ──► release-batch.yml (click, choose batch 1-4): writes landing/batch_NN/_SUCCESS and waits for the run
+Actions tab ──► release-batch.yml (click, type a batch number 1-99): writes landing/batch_NN/_SUCCESS and waits for the run
 ```
 Pushed ≠ deployed (deployment only starts if the checks are green). Deployed ≠ run: **a deployment never loads data**. Loading is the separate `Release batch` click, because re-running data is a deliberate act.
 
@@ -34,13 +34,13 @@ Checked in the notebook with the policy simulator: the deploy role may `UpdateSt
 |---|---|
 | `.github/workflows/ci.yml` | New step: `cfn-lint infra/cloudformation/*.yaml` |
 | `.github/workflows/deploy.yml` | Runs `infra/stacks.py` instead of `infra/deploy.py` |
-| `.github/workflows/release-batch.yml` | New. `workflow_dispatch` with a choice of batch 1-4; one release at a time (`concurrency`) |
+| `.github/workflows/release-batch.yml` | New. `workflow_dispatch` with a number box (any batch 1-99, no fixed list); one release at a time (`concurrency`) |
 | `infra/release_batch.py` | Writes the marker (the file count is counted at that moment), finds the one run EventBridge starts, waits, exits with an error unless it SUCCEEDED |
 | `infra/stacks.py` | Builds and uploads the artifacts, runs `aws cloudformation deploy` |
 | `tests/test_workflows.py`, `tests/test_release_batch.py` | The shape of the three workflows; the release logic with fake S3 and Step Functions clients |
 
 ## Repository variables (Settings → Secrets and variables → Actions → Variables)
-Names, not secrets. Existing: `AWS_DEPLOY_ROLE_ARN` (same role name as before, so the value stays), `AWS_REGION`, `LAKE_BUCKET`, `SILVER_DATABASE`, `NUMBER_OF_BATCHES`. **New:** `RESULTS_BUCKET` (the Athena results bucket) and `AWS_CLOUDFORMATION_ROLE_ARN` (the `CloudFormationRoleArn` output of the `pf-cicd` stack; the notebook prints it).
+Names, not secrets. Existing: `AWS_DEPLOY_ROLE_ARN` (same role name as before, so the value stays), `AWS_REGION`, `LAKE_BUCKET`, `SILVER_DATABASE`. (`NUMBER_OF_BATCHES` is no longer used: delete it if it is still set.) **New:** `RESULTS_BUCKET` (the Athena results bucket) and `AWS_CLOUDFORMATION_ROLE_ARN` (the `CloudFormationRoleArn` output of the `pf-cicd` stack; the notebook prints it).
 
 ## Good to know
 * **Roll back** by deploying an older commit (re-run the Deploy workflow on it): the stacks point back at that commit's code.

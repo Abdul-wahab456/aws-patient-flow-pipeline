@@ -4,7 +4,9 @@
 
 > **Naming change (2026-10-26):** the target folder is `bronze/patient_records/ingest_date=<date>/` (was `raw/fhir/...`) and the receipt file is `_batch_metadata.json` (was `_manifest.json`). The Lambda, its unit tests and its IAM policy were updated, and the notebook was re-run.
 >
-> **Scope change (2026-10-26):** the project now uses 4 batches, so `NUMBER_OF_BATCHES` is 4 and the Lambda was redeployed with that value. Batches 0, 5 and 11 are all rejected: the error message now reads "batch must be between 1 and 4". The notebook was re-run to confirm this.
+> **Scope change (2026-10-26):** the project first used 4 batches, with `NUMBER_OF_BATCHES` = 4.
+>
+> **Update (2026-10-27): no fixed number of batches.** The setting `NUMBER_OF_BATCHES` is gone. The Lambda accepts any batch from 1 to 99 (a two-digit folder `batch_NN`); batch 0, batch 100 and `batch_5` are rejected. A new batch needs no code change, no setting and no deployment (see `docs/phase_10_event_trigger`). The text below describes the first version.
 
 Move one batch of raw files from `landing/` into the **bronze layer**, untouched, under a folder named after its arrival date. This is the first step of every pipeline run.
 

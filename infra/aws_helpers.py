@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 import boto3
@@ -263,6 +264,16 @@ def files_in_batch(batch, bucket=None):
     prefix = f"landing/batch_{batch:02d}/"
     objects = aws_json("s3api", "list-objects-v2", "--bucket", bucket, "--prefix", prefix).get("Contents", [])
     return [o for o in objects if not o["Key"].endswith("/_SUCCESS")]
+
+
+def batches_in_landing(bucket=None):
+    """The batch numbers that exist in landing/ right now (any number of batches, no fixed list)."""
+    return release.list_batches(boto3.client("s3", region_name=REGION), bucket or LAKE)
+
+
+def ingest_date_of(batch):
+    """The ingest date the pipeline gives a batch: the first ingest date plus one day per batch."""
+    return (date.fromisoformat(SETTINGS["first_ingest_date"]) + timedelta(days=batch - 1)).isoformat()
 
 
 def release_batch(batch, state_machine_arn, bucket=None, announced_files=None, wait=True, timeout=1500):

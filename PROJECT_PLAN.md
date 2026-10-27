@@ -23,6 +23,7 @@ An end-to-end, code-first data pipeline on AWS that ingests **synthetic hospital
 | 2026-10-23 | **Event-driven trigger:** the pipeline will start when a new batch lands in S3 (a `_SUCCESS` marker file triggers an EventBridge rule), replacing the daily schedule. Built as an upgrade (Phase 10). |
 | 2026-10-23 | **CI/CD:** GitHub Actions tests and deploys the stacks on every push (Phase 12). |
 | 2026-10-26 | **Smaller scope while learning:** only **4 batches** (the first four of the 10 generated; 139 files, 294.9 MB) are used and uploaded. Batches 5-10 stay on the laptop in `data/landing_extra/`. The S3 buckets were **renamed the same day**, before Phase 5 (little depended on them yet): `patientflow-datalake-<suffix>` and `patientflow-athena-query-results-<suffix>`. |
+| 2026-10-27 | **No fixed number of batches:** `NUMBER_OF_BATCHES` was removed from the Lambda, CloudFormation, the deploy code, the settings and the workflows. Any `landing/batch_NN` (01-99) is accepted; a new batch is added by uploading its files and releasing it (marker). The project still *loads* 4 batches so far. |
 | 2026-10-26 | **Meaningful names** (decided with Jared): layer folders `landing/` `bronze/` `silver/` `gold/`; source folder `patient_records/` (was `fhir/`); batch receipt `_batch_metadata.json` (was `_manifest.json`); `glue_scripts/` and `data_quality_results/`; the unused `state/` folder is gone. Buckets: see the row above. |
 | 2026-10-26 | **Build order:** first a **simple end-to-end pipeline** (Phases 4-9: Lambda, Glue, gold, Step Functions started by hand), then the upgrades one at a time: event trigger (10), CloudFormation (11), CI/CD (12), Power BI (13). |
 | 2026-10-26 | **CI built early:** the GitHub Actions workflow `ci.yml` (ruff lint + pytest with coverage + JSON validation) already exists and runs from the first push. The CD part (auto-deploy to AWS) stays in Phase 12 because it needs the CloudFormation stacks of Phase 11. |
@@ -298,7 +299,7 @@ Each phase: build → verify with CLI → commit to Git → confirm with Jared.
 ### Phase 4 — Ingestion Lambda (bronze)
 
 - `lambda/ingest/handler.py`. Input: `{"batch": N}`.
-  - Validate `1 <= N <= 4` (`NUMBER_OF_BATCHES`); otherwise fail with a clear error.
+  - Validate `1 <= N <= 99` (a two-digit folder `batch_NN`; there is **no `NUMBER_OF_BATCHES` setting**, a new batch needs no change); otherwise fail with a clear error.
   - Compute `ingest_date = 2026-11-01 + (N-1) days`.
   - List `landing/batch_NN/`; **fail if it is empty**.
   - Copy every object to `bronze/patient_records/ingest_date=<date>/` (server-side `copy_object`) and write `_batch_metadata.json` (batch, file count, bytes, timestamp).
@@ -306,7 +307,7 @@ Each phase: build → verify with CLI → commit to Git → confirm with Jared.
   - Return `{"status": "OK", "batch": N, "ingest_date": "...", "file_count": n}`. Structured logging.
 - Deployed with CLI commands from a notebook: zip the code, `aws lambda create-function` / `update-function-code`.
 - Test: `aws lambda invoke --function-name pf-ingest --payload ...`, then list the bronze partition.
-- **Done when:** batch 1 lands in `bronze/` with a metadata file; a rerun gives the same result; batch 0 and batch 5 fail with a clear error.
+- **Done when:** batch 1 lands in `bronze/` with a metadata file; a rerun gives the same result; batch 0 and batch 100 fail with a clear error; batch 5 works.
 
 ### Phase 5 — Glue job (bronze → silver)
 

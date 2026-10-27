@@ -10,7 +10,7 @@ one commit. To roll back, deploy an older commit again.
 
 Settings come from environment variables (used by GitHub Actions) or, when a variable is missing,
 from config/settings.json (used on a laptop):
-    LAKE_BUCKET, SILVER_DATABASE, GLUE_JOB_NAME, LAMBDA_NAME, FIRST_INGEST_DATE, NUMBER_OF_BATCHES, AWS_REGION,
+    LAKE_BUCKET, SILVER_DATABASE, GLUE_JOB_NAME, LAMBDA_NAME, FIRST_INGEST_DATE, AWS_REGION,
     ATHENA_WORKGROUP, STATE_MACHINE_NAME, RESULTS_BUCKET, PROJECT_PREFIX
 AWS credentials come from the normal AWS sources (GitHub Actions logs in with a short-lived role).
 """
@@ -53,7 +53,6 @@ def load_config(environ=None, settings_path=None):
         "glue_job": pick("GLUE_JOB_NAME", "glue_job_name", default="pf-bronze-to-silver"),
         "lambda_name": pick("LAMBDA_NAME", "lambda_name", default="pf-ingest"),
         "first_ingest_date": pick("FIRST_INGEST_DATE", "first_ingest_date", default="2026-11-01"),
-        "number_of_batches": str(pick("NUMBER_OF_BATCHES", "number_of_batches", default="4")),
         "workgroup": pick("ATHENA_WORKGROUP", "athena_workgroup", default="pf-wg"),
         "state_machine": pick("STATE_MACHINE_NAME", "state_machine_name", default="pf-batch-pipeline"),
         # only the CloudFormation stacks (infra/stacks.py) need these two
@@ -107,7 +106,6 @@ def lambda_settings(role_arn, config):
         "Environment": {"Variables": {
             "LAKE_BUCKET": config["lake_bucket"],
             "FIRST_INGEST_DATE": config["first_ingest_date"],
-            "NUMBER_OF_BATCHES": config["number_of_batches"],
         }},
     }
 

@@ -1,7 +1,7 @@
 """Ingest Lambda (bronze layer): copy one landing batch into the bronze layer.
 
 Two kinds of input event:
-  {"batch": N}                      start a batch by hand, 1 <= N <= NUMBER_OF_BATCHES
+  {"batch": N}                      start a batch by hand, 1 <= N <= 99
   {"bucket": B, "key": "landing/batch_NN/_SUCCESS"}
                                     the delivery marker of a batch (sent by the EventBridge trigger).
                                     The marker file is JSON {"files": <count>}: the number of files the sender
@@ -14,7 +14,8 @@ Running the same batch again overwrites the same keys, so a retry never
 creates duplicates.
 
 Settings come from environment variables set at deploy time:
-    LAKE_BUCKET, FIRST_INGEST_DATE (default 2026-11-01), NUMBER_OF_BATCHES (default 10)
+    LAKE_BUCKET, FIRST_INGEST_DATE (default 2026-11-01)
+There is no limit on how many batches a pipeline handles: any folder landing/batch_01 ... batch_99 is accepted.
 """
 import json
 import logging
@@ -35,9 +36,10 @@ def log(message, **fields):
 
 MARKER_NAME = "_SUCCESS"
 MARKER_KEY = re.compile(r"landing/batch_(\d{2})/_SUCCESS")
+LAST_BATCH = 99                 # batch folders have two digits: batch_01 ... batch_99
 
 
-def parse_batch(event, n_batches):
+def parse_batch(event):
     """Return the batch number from the event, or raise ValueError if it is missing or out of range.
 
     The batch is either given directly ({"batch": N}) or taken from the key of a marker file
@@ -53,8 +55,8 @@ def parse_batch(event, n_batches):
         # bool is a subclass of int in Python, so True would otherwise pass as batch 1
         if isinstance(batch, bool) or not isinstance(batch, int):
             raise ValueError(f'event must contain an integer "batch", got: {event!r}')
-    if not 1 <= batch <= n_batches:
-        raise ValueError(f"batch must be between 1 and {n_batches}, got {batch}")
+    if not 1 <= batch <= LAST_BATCH:
+        raise ValueError(f"batch must be between 1 and {LAST_BATCH}, got {batch}")
     return batch
 
 
@@ -132,10 +134,9 @@ def lambda_handler(event, context):
     """Entry point called by AWS Lambda."""
     bucket = os.environ["LAKE_BUCKET"]
     first_ingest_date = date.fromisoformat(os.environ.get("FIRST_INGEST_DATE", "2026-11-01"))
-    n_batches = int(os.environ.get("NUMBER_OF_BATCHES", "10"))
 
     try:
-        batch = parse_batch(event, n_batches)
+        batch = parse_batch(event)
         s3 = boto3.client("s3")
         expected_files = None
         if "key" in event:

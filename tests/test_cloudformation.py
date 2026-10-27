@@ -163,10 +163,16 @@ RESOURCES_PIPELINE = pipeline["Resources"]
 
 def test_the_lambda_is_configured_like_deploy_lambda_does_it():
     properties = RESOURCES_PIPELINE["IngestFunction"]["Properties"]
-    expected = deploy.lambda_settings("role", {"lake_bucket": "x", "first_ingest_date": "d", "number_of_batches": "n"})
+    expected = deploy.lambda_settings("role", {"lake_bucket": "x", "first_ingest_date": "d"})
     for key in ("Runtime", "Handler", "Timeout", "MemorySize"):
         assert properties[key] == expected[key]
     assert set(properties["Environment"]["Variables"]) == set(expected["Environment"]["Variables"])
+
+
+def test_there_is_no_fixed_number_of_batches_anywhere_in_the_pipeline_stack():
+    assert "NumberOfBatches" not in pipeline["Parameters"]
+    assert "NUMBER_OF_BATCHES" not in json.dumps(pipeline)
+    assert "NUMBER_OF_BATCHES" not in RESOURCES_PIPELINE["IngestFunction"]["Properties"]["Environment"]["Variables"]
 
 
 def test_the_glue_job_is_configured_like_deploy_glue_job_does_it():
@@ -181,7 +187,7 @@ def test_the_glue_job_is_configured_like_deploy_glue_job_does_it():
 
 def test_the_template_reads_the_code_from_the_keys_that_stacks_py_uploads(tmp_path):
     config = {**{"project_prefix": "pf", "region": "us-east-1", "lake_bucket": "lake", "results_bucket": "r",
-                 "first_ingest_date": "2026-11-01", "number_of_batches": "4", "silver_database": "pf_silver"}}
+                 "first_ingest_date": "2026-11-01", "silver_database": "pf_silver"}}
     built = stacks.build_artifacts(config, "123456789012", "v1", tmp_path)
     text = json.dumps(pipeline)
     for name in built:
@@ -192,7 +198,7 @@ def test_the_template_reads_the_code_from_the_keys_that_stacks_py_uploads(tmp_pa
 
 def test_the_built_workflow_uses_the_resource_names_of_the_template(tmp_path):
     config = {"project_prefix": "pfx", "region": "us-east-1", "lake_bucket": "lake", "results_bucket": "r",
-              "first_ingest_date": "2026-11-01", "number_of_batches": "4", "silver_database": "pf_silver",
+              "first_ingest_date": "2026-11-01", "silver_database": "pf_silver",
               "lambda_name": "ignored", "glue_job": "ignored", "workgroup": "ignored", "state_machine": "ignored"}
     built = stacks.build_artifacts(config, "123456789012", "v1", tmp_path)
     definition = built["state_machine.json"].read_text(encoding="utf-8")
@@ -233,8 +239,7 @@ def test_the_deploy_command_creates_or_updates_a_named_stack_with_its_parameters
 
 
 def test_the_stack_parameters_cover_every_parameter_without_a_default():
-    config = {"project_prefix": "pf", "lake_bucket": "l", "results_bucket": "r", "first_ingest_date": "2026-11-01",
-              "number_of_batches": "4"}
+    config = {"project_prefix": "pf", "lake_bucket": "l", "results_bucket": "r", "first_ingest_date": "2026-11-01"}
     for template, supplied in ((foundation, stacks.foundation_parameters(config)),
                                (pipeline, stacks.pipeline_parameters(config, "v1"))):
         required = {name for name, spec in template["Parameters"].items() if "Default" not in spec}

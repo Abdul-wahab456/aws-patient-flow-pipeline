@@ -39,21 +39,22 @@ class FakeS3:
         self.put[Key] = json.loads(Body)
 
 
-def test_parse_batch_accepts_valid_numbers():
-    assert handler.parse_batch({"batch": 1}, 10) == 1
-    assert handler.parse_batch({"batch": 10}, 10) == 10
+@pytest.mark.parametrize("batch", [1, 4, 5, 6, 10, 50, 99])
+def test_parse_batch_accepts_every_batch_from_1_to_99(batch):
+    assert handler.parse_batch({"batch": batch}) == batch
 
 
-@pytest.mark.parametrize("event", [{"batch": 0}, {"batch": 11}, {"batch": -1}, {"batch": "1"},
+@pytest.mark.parametrize("event", [{"batch": 0}, {"batch": 100}, {"batch": -1}, {"batch": "1"},
                                    {"batch": True}, {"batch": None}, {}, None, "1"])
 def test_parse_batch_rejects_bad_input(event):
     with pytest.raises(ValueError):
-        handler.parse_batch(event, 10)
+        handler.parse_batch(event)
 
 
 def test_ingest_date_is_one_day_per_batch():
     assert handler.ingest_date_for(1, FIRST_DATE) == date(2026, 11, 1)
     assert handler.ingest_date_for(10, FIRST_DATE) == date(2026, 11, 10)
+    assert handler.ingest_date_for(99, FIRST_DATE) == date(2027, 2, 7)       # the last batch folder, batch_99
 
 
 def test_ingest_batch_copies_files_and_writes_metadata():
@@ -91,7 +92,6 @@ def test_ingest_batch_twice_gives_the_same_result():
 def _set_environment(monkeypatch, s3):
     monkeypatch.setenv("LAKE_BUCKET", "bucket")
     monkeypatch.setenv("FIRST_INGEST_DATE", "2026-11-01")
-    monkeypatch.setenv("NUMBER_OF_BATCHES", "4")
     monkeypatch.setattr(handler.boto3, "client", lambda service: s3)
 
 
@@ -104,11 +104,20 @@ def test_lambda_handler_runs_a_batch_from_the_environment_settings(monkeypatch):
     assert result == {"status": "OK", "batch": 1, "ingest_date": "2026-11-01", "file_count": 1}
 
 
-def test_lambda_handler_rejects_a_batch_above_the_configured_maximum(monkeypatch):
+def test_lambda_handler_has_no_fixed_number_of_batches_a_new_batch_just_works(monkeypatch):
+    s3 = FakeS3({"landing/batch_05/a.json": 10})
+    _set_environment(monkeypatch, s3)
+
+    result = handler.lambda_handler({"batch": 5}, None)
+
+    assert result == {"status": "OK", "batch": 5, "ingest_date": "2026-11-05", "file_count": 1}
+
+
+def test_lambda_handler_rejects_batch_100_which_has_no_two_digit_folder(monkeypatch):
     _set_environment(monkeypatch, FakeS3({}))
 
-    with pytest.raises(ValueError, match="between 1 and 4"):
-        handler.lambda_handler({"batch": 5}, None)
+    with pytest.raises(ValueError, match="between 1 and 99"):
+        handler.lambda_handler({"batch": 100}, None)
 
 
 def test_lambda_handler_reraises_so_the_caller_sees_the_failure(monkeypatch):
@@ -135,7 +144,9 @@ def delivered_batch_2(announced_files):
 
 
 def test_parse_batch_reads_the_batch_number_from_a_marker_key():
-    assert handler.parse_batch(marker_event("landing/batch_03/_SUCCESS"), 4) == 3
+    assert handler.parse_batch(marker_event("landing/batch_03/_SUCCESS")) == 3
+    assert handler.parse_batch(marker_event("landing/batch_05/_SUCCESS")) == 5      # no fixed number of batches
+    assert handler.parse_batch(marker_event("landing/batch_99/_SUCCESS")) == 99
 
 
 @pytest.mark.parametrize("key", [
@@ -143,12 +154,12 @@ def test_parse_batch_reads_the_batch_number_from_a_marker_key():
     "bronze/batch_03/_SUCCESS",         # wrong folder
     "landing/batch_3/_SUCCESS",         # batch number must have two digits
     "landing/batch_03/x/_SUCCESS",      # marker must sit directly in the batch folder
-    "landing/batch_05/_SUCCESS",        # batch 5 does not exist (4 batches)
+    "landing/batch_100/_SUCCESS",       # three digits
     "landing/batch_00/_SUCCESS",
 ])
 def test_parse_batch_rejects_keys_that_are_not_a_valid_marker(key):
     with pytest.raises(ValueError):
-        handler.parse_batch(marker_event(key), 4)
+        handler.parse_batch(marker_event(key))
 
 
 def test_read_expected_files_returns_the_announced_count():

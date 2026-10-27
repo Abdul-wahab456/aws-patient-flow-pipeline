@@ -67,7 +67,6 @@ Each deployment uploads to its own folder named by the Git commit id: `glue_scri
    | `AWS_REGION` | `us-east-1` |
    | `LAKE_BUCKET` | the data lake bucket name (`config/settings.json`) |
    | `SILVER_DATABASE` | `pf_silver` |
-   | `NUMBER_OF_BATCHES` | `4` |
 
 4. Push a change to `main` (or press **Run workflow** on the Deploy workflow) and read the result in the **Actions** tab.
 
@@ -89,7 +88,7 @@ Settings are read from `config/settings.json`; the laptop's own AWS login is use
 | Push of commit `b1c03e2` to `main` | `Deploy` workflow green: `checks` job (lint + 58 tests) then `deploy` job |
 | S3 | new folder `glue_scripts/b1c03e262a.../` holding `bronze_to_silver.py` and `fhir_utils.py` |
 | Glue job | `ScriptLocation` and `--extra-py-files` point at that commit's folder; settings unchanged (Glue 5.0, 2 workers, 10 min, 0 retries) |
-| Lambda | code and configuration updated by the same deployment; `NUMBER_OF_BATCHES` = 4 |
+| Lambda | code and configuration updated by the same deployment |
 | The deployed Lambda, batch 1 | `OK`, 37 files |
 | The deployed Glue job, batch 1 | `SUCCEEDED` in 110 s (about $0.03); patient 35, encounter 1,411, condition 854, organization 521, practitioner 521: identical to the earlier verified run |
 
