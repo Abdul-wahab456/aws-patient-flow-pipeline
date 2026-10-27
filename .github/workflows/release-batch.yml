@@ -1,0 +1,49 @@
+name: Release batch
+
+# Starts the pipeline for one batch that is already in landing/: writes landing/batch_NN/_SUCCESS (with the number of
+# files) and waits for the run that EventBridge starts. Run it from the Actions tab: Release batch > Run workflow.
+# A deployment (deploy.yml) never loads data by itself; loading data is this separate, deliberate click.
+on:
+  workflow_dispatch:
+    inputs:
+      batch:
+        description: Batch number to release
+        required: true
+        type: choice
+        options: ["1", "2", "3", "4"]
+
+# One release at a time (two runs would merge into the same tables at once)
+concurrency:
+  group: release-batch
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      LAKE_BUCKET: ${{ vars.LAKE_BUCKET }}
+      SILVER_DATABASE: ${{ vars.SILVER_DATABASE }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install boto3
+        run: pip install boto3==1.43.117
+
+      - name: Log in to AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Release the batch and wait for the run
+        run: python infra/release_batch.py --batch "${{ inputs.batch }}"

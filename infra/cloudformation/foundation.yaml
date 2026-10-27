@@ -1,0 +1,322 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Patient-flow pipeline, foundation stack: the two S3 buckets, the Glue catalog databases, the Athena workgroup
+  and the four IAM roles the pipeline runs as. The permissions are the ones tested in notebooks/iam_roles.ipynb
+  (infra/policies/*.json); tests/test_cloudformation.py checks that both copies stay identical.
+
+Parameters:
+  ProjectPrefix:
+    Type: String
+    Default: pf
+    AllowedPattern: "^[a-z][a-z0-9]{1,7}$"
+    Description: Start of every resource name (pf gives pf-lambda-role, pf-wg, pf_gold, ...). Letters and digits only.
+  LakeBucketName:
+    Type: String
+    Description: Name of the data lake bucket (landing, bronze, silver, gold)
+  ResultsBucketName:
+    Type: String
+    Description: Name of the bucket that holds Athena query results
+
+Resources:
+  # ---------------------------------------------------------------- S3
+  # Retain: deleting the stack never deletes the data. infra/teardown.py empties and deletes the buckets on purpose.
+  LakeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref LakeBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref ResultsBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-athena-results-after-7-days
+            Status: Enabled
+            Prefix: ""
+            ExpirationInDays: 7
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  # ---------------------------------------------------------------- Glue catalog and Athena
+  # The SQL files name these databases, so they are not renamed with the prefix.
+  SilverDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: pf_silver
+        Description: Cleaned and flattened FHIR data (Parquet)
+
+  GoldDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: pf_gold
+        Description: Dimensional model and KPI views (Iceberg)
+
+  Workgroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub "${ProjectPrefix}-wg"
+      Description: Patient-flow pipeline queries
+      State: ENABLED
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        BytesScannedCutoffPerQuery: 1073741824
+        EngineVersion:
+          SelectedEngineVersion: Athena engine version 3
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${ResultsBucketName}/"
+          EncryptionConfiguration:
+            EncryptionOption: SSE_S3
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  # ---------------------------------------------------------------- IAM roles
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectPrefix}-lambda-role"
+      Description: "Ingest Lambda: copy landing batches to bronze"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub "${ProjectPrefix}-lambda-role-permissions"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListLandingAndBronze
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::${LakeBucketName}"
+                Condition:
+                  StringLike:
+                    s3:prefix: ["landing/*", "bronze/*"]
+              - Sid: ReadLanding
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${LakeBucketName}/landing/*"
+              - Sid: WriteBronze
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${LakeBucketName}/bronze/*"
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  GlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectPrefix}-glue-role"
+      Description: "Glue job: flatten raw FHIR into silver tables"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: glue.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: !Sub "${ProjectPrefix}-glue-role-permissions"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListLakeBucket
+                Effect: Allow
+                Action: ["s3:ListBucket", "s3:GetBucketLocation"]
+                Resource: !Sub "arn:aws:s3:::${LakeBucketName}"
+              - Sid: ReadBronzeAndScripts
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${LakeBucketName}/bronze/*"
+                  - !Sub "arn:aws:s3:::${LakeBucketName}/glue_scripts/*"
+              - Sid: ReadWriteSilverAndTemp
+                Effect: Allow
+                Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+                Resource:
+                  - !Sub "arn:aws:s3:::${LakeBucketName}/silver/*"
+                  - !Sub "arn:aws:s3:::${LakeBucketName}/temp/*"
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectPrefix}-step-functions-role"
+      Description: "Step Functions: orchestrate the daily pipeline"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: states.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ProjectPrefix}-step-functions-role-permissions"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeIngestLambda
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectPrefix}-ingest"
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectPrefix}-ingest:*"
+              - Sid: RunGlueJob
+                Effect: Allow
+                Action: ["glue:StartJobRun", "glue:GetJobRun", "glue:GetJobRuns", "glue:BatchStopJobRun"]
+                Resource: !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:job/${ProjectPrefix}-bronze-to-silver"
+              - Sid: RunAthenaQueries
+                Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                  - athena:GetWorkGroup
+                Resource: !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${ProjectPrefix}-wg"
+              - Sid: GlueCatalogForAthena
+                Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetTableVersion
+                  - glue:GetTableVersions
+                  - glue:CreateTable
+                  - glue:UpdateTable
+                  - glue:DeleteTable
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:BatchGetPartition
+                  - glue:CreatePartition
+                  - glue:BatchCreatePartition
+                  - glue:UpdatePartition
+                  - glue:DeletePartition
+                  - glue:BatchDeletePartition
+                Resource:
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/pf_silver"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/pf_gold"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/pf_silver/*"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/pf_gold/*"
+              - Sid: LakeBucketList
+                Effect: Allow
+                Action: ["s3:ListBucket", "s3:GetBucketLocation"]
+                Resource: !Sub "arn:aws:s3:::${LakeBucketName}"
+              - Sid: LakeObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource: !Sub "arn:aws:s3:::${LakeBucketName}/*"
+              - Sid: ResultsBucketList
+                Effect: Allow
+                Action: ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"]
+                Resource: !Sub "arn:aws:s3:::${ResultsBucketName}"
+              - Sid: ResultsObjects
+                Effect: Allow
+                Action: ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
+                Resource: !Sub "arn:aws:s3:::${ResultsBucketName}/*"
+              - Sid: StateMachineLogging
+                Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: "*"
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  TriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectPrefix}-trigger-role"
+      Description: "EventBridge: start the pipeline when a batch arrives"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ProjectPrefix}-trigger-role-permissions"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: StartThePipeline
+                Effect: Allow
+                Action: states:StartExecution
+                Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${ProjectPrefix}-batch-pipeline"
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+Outputs:
+  LakeBucket:
+    Value: !Ref LakeBucket
+    Export: { Name: !Sub "${AWS::StackName}-LakeBucket" }
+  ResultsBucket:
+    Value: !Ref ResultsBucket
+    Export: { Name: !Sub "${AWS::StackName}-ResultsBucket" }
+  Workgroup:
+    Value: !Ref Workgroup
+    Export: { Name: !Sub "${AWS::StackName}-Workgroup" }
+  LambdaRoleArn:
+    Value: !GetAtt LambdaRole.Arn
+    Export: { Name: !Sub "${AWS::StackName}-LambdaRoleArn" }
+  GlueRoleArn:
+    Value: !GetAtt GlueRole.Arn
+    Export: { Name: !Sub "${AWS::StackName}-GlueRoleArn" }
+  StepFunctionsRoleArn:
+    Value: !GetAtt StepFunctionsRole.Arn
+    Export: { Name: !Sub "${AWS::StackName}-StepFunctionsRoleArn" }
+  TriggerRoleArn:
+    Value: !GetAtt TriggerRole.Arn
+    Export: { Name: !Sub "${AWS::StackName}-TriggerRoleArn" }

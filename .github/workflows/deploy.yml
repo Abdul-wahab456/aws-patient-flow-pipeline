@@ -1,6 +1,7 @@
 name: Deploy
 
-# After every push to main: check the code (CI), and only if the checks pass, deploy it to AWS.
+# After every push to main: check the code (CI), and only if the checks pass, deploy it to AWS
+# (the CloudFormation stacks pf-foundation and pf-pipeline).
 # Can also be started by hand from the Actions tab.
 on:
   push:
@@ -28,6 +29,7 @@ jobs:
       # Names, not secrets. Set them in the repository: Settings > Secrets and variables > Actions > Variables
       AWS_REGION: ${{ vars.AWS_REGION }}
       LAKE_BUCKET: ${{ vars.LAKE_BUCKET }}
+      RESULTS_BUCKET: ${{ vars.RESULTS_BUCKET }}
       SILVER_DATABASE: ${{ vars.SILVER_DATABASE }}
       NUMBER_OF_BATCHES: ${{ vars.NUMBER_OF_BATCHES }}
     steps:
@@ -50,6 +52,8 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      # The Git commit id names this deployment: the Glue job reads the scripts of exactly this commit
-      - name: Deploy the Glue job and the Lambda
-        run: python infra/deploy.py --version "${{ github.sha }}"
+      # The Git commit id names this deployment. stacks.py deploys the foundation stack, uploads the code of this
+      # commit (Glue scripts, Lambda zip, workflow definition) and deploys the pipeline stack, which points at it.
+      # CloudFormation creates the resources as the CloudFormation role; the login role can only hand over to it.
+      - name: Deploy the CloudFormation stacks
+        run: python infra/stacks.py --version "${{ github.sha }}" --role-arn "${{ vars.AWS_CLOUDFORMATION_ROLE_ARN }}"

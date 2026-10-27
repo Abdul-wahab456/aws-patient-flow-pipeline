@@ -1,5 +1,7 @@
 # CD: deploying to AWS from GitHub (GitHub Actions)
 
+> **Update (Phase 12):** the deployment now deploys the CloudFormation stacks (`infra/stacks.py`) with two roles instead of calling `infra/deploy.py` directly. The login idea, the OIDC trust and the versioned code below are unchanged; what the roles may do and the new steps are in [phase_12_cd_stacks/README.md](phase_12_cd_stacks/README.md). This page describes the first (direct) version, which taught the same login mechanism.
+
 ## The idea
 Push code to `main` and AWS gets the new version by itself. Nobody copies files to S3 by hand, and **no AWS access key is stored in GitHub**.
 

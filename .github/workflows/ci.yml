@@ -42,6 +42,10 @@ jobs:
       - name: Lint with ruff
         run: python -m ruff check .
 
+      # Checks the CloudFormation templates: wrong property names, broken references, missing parameters
+      - name: Lint the CloudFormation templates
+        run: cfn-lint infra/cloudformation/*.yaml
+
       # Runs every test in tests/ and prints which lines of the code the tests cover
       - name: Unit tests with pytest
         run: python -m pytest

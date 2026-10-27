@@ -1,0 +1,296 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Patient-flow pipeline, CI/CD stack: lets GitHub Actions deploy the other two stacks without any stored AWS key.
+  GitHub logs in with a short-lived token (OIDC) and may assume ONE role, the deploy role. That role can only start
+  CloudFormation and hand the work to the CloudFormation service role. The service role is the one that is allowed
+  to create the pipeline's resources, and only the ones named with the project prefix.
+  This stack is deployed once by a person (an administrator); the pipeline stacks are then deployed by GitHub.
+
+Parameters:
+  ProjectPrefix:
+    Type: String
+    Default: pf
+    AllowedPattern: "^[a-z][a-z0-9]{1,7}$"
+    Description: Same prefix as the other stacks
+  LakeBucketName:
+    Type: String
+  ResultsBucketName:
+    Type: String
+  GitHubSubject:
+    Type: String
+    Description: >-
+      Who may log in. For one repository and one branch, e.g.
+      repo:<owner>@<owner id>/<repository>@<repository id>:ref:refs/heads/main (the ids are the numbers GitHub puts into its token)
+  OidcProviderArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ARN of the GitHub OIDC provider if the account already has one (an account can have only one). Empty: this stack creates it.
+
+Conditions:
+  CreateProvider: !Equals [!Ref OidcProviderArn, ""]
+
+Resources:
+  GitHubProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  # ---------------------------------------------------------------- the role GitHub assumes
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectPrefix}-github-deploy-role"
+      Description: "GitHub Actions: deploy the pipeline stacks and release batches"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateProvider, !Ref GitHubProvider, !Ref OidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+                "token.actions.githubusercontent.com:sub": !Ref GitHubSubject
+      Policies:
+        - PolicyName: !Sub "${ProjectPrefix}-github-deploy-role-permissions"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DeployTheTwoStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectPrefix}-foundation/*"
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectPrefix}-pipeline/*"
+              - Sid: ChecksThatNameNoResource
+                Effect: Allow
+                Action: ["cloudformation:ValidateTemplate", "cloudformation:ListStacks"]
+                Resource: "*"
+              - Sid: HandTheWorkToTheCloudFormationRoleOnly
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationRole.Arn
+                Condition:
+                  StringEquals:
+                    "iam:PassedToService": cloudformation.amazonaws.com
+              - Sid: UploadTheCode
+                Effect: Allow
+                Action: s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${LakeBucketName}/glue_scripts/*"
+                  - !Sub "arn:aws:s3:::${LakeBucketName}/artifacts/*"
+              - Sid: ReleaseABatch
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${LakeBucketName}/landing/*/_SUCCESS"
+              - Sid: CountTheFilesOfABatch
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::${LakeBucketName}"
+                Condition:
+                  StringLike:
+                    "s3:prefix": ["landing/*"]
+              - Sid: WatchTheRun
+                Effect: Allow
+                Action: ["states:ListExecutions", "states:DescribeExecution", "states:GetExecutionHistory"]
+                Resource:
+                  - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${ProjectPrefix}-batch-pipeline"
+                  - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:${ProjectPrefix}-batch-pipeline:*"
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  # ---------------------------------------------------------------- the role CloudFormation works as
+  CloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectPrefix}-cloudformation-role"
+      Description: "CloudFormation: create and update the pipeline resources (only the project's own names)"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ProjectPrefix}-cloudformation-role-permissions"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageThePipelineRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-lambda-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-glue-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-step-functions-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-trigger-role"
+              - Sid: AttachOnlyTheTwoAwsManagedPolicies
+                Effect: Allow
+                Action: ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-lambda-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-glue-role"
+                Condition:
+                  ArnEquals:
+                    "iam:PolicyARN":
+                      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+                      - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+              - Sid: GiveTheRolesToTheServices
+                Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-lambda-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-glue-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-step-functions-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectPrefix}-trigger-role"
+              - Sid: ManageTheTwoBuckets
+                Effect: Allow
+                Action: "s3:*"
+                Resource:
+                  - !Sub "arn:aws:s3:::${LakeBucketName}"
+                  - !Sub "arn:aws:s3:::${ResultsBucketName}"
+              - Sid: ReadTheUploadedCode
+                Effect: Allow
+                Action: ["s3:GetObject", "s3:GetObjectVersion"]
+                Resource:
+                  - !Sub "arn:aws:s3:::${LakeBucketName}/artifacts/*"
+                  - !Sub "arn:aws:s3:::${LakeBucketName}/glue_scripts/*"
+              - Sid: ManageTheCatalogAndTheGlueJob
+                Effect: Allow
+                Action:
+                  - glue:CreateDatabase
+                  - glue:DeleteDatabase
+                  - glue:UpdateDatabase
+                  - glue:GetDatabase
+                  - glue:CreateJob
+                  - glue:UpdateJob
+                  - glue:DeleteJob
+                  - glue:GetJob
+                  - glue:TagResource
+                  - glue:UntagResource
+                  - glue:GetTags
+                Resource:
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/pf_silver"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/pf_gold"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:userDefinedFunction/pf_silver/*"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:userDefinedFunction/pf_gold/*"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/pf_silver/*"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/pf_gold/*"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:job/${ProjectPrefix}-bronze-to-silver"
+              - Sid: ManageTheWorkgroup
+                Effect: Allow
+                Action:
+                  - athena:CreateWorkGroup
+                  - athena:DeleteWorkGroup
+                  - athena:UpdateWorkGroup
+                  - athena:GetWorkGroup
+                  - athena:TagResource
+                  - athena:UntagResource
+                  - athena:ListTagsForResource
+                Resource: !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${ProjectPrefix}-wg"
+              - Sid: ManageTheLambda
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:ListTags
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectPrefix}-ingest"
+              - Sid: ManageTheWorkflow
+                Effect: Allow
+                Action:
+                  - states:CreateStateMachine
+                  - states:DeleteStateMachine
+                  - states:DescribeStateMachine
+                  - states:UpdateStateMachine
+                  - states:ListTagsForResource
+                  - states:TagResource
+                  - states:UntagResource
+                Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${ProjectPrefix}-batch-pipeline"
+              - Sid: ManageTheTriggerRule
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                  - events:ListTagsForResource
+                  - events:TagResource
+                  - events:UntagResource
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${ProjectPrefix}-new-batch-rule"
+              - Sid: ManageTheLogGroups
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:ListTagsForResource
+                  - logs:ListTagsLogGroup
+                  - logs:TagResource
+                  - logs:UntagResource
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectPrefix}-ingest"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectPrefix}-ingest:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vendedlogs/states/${ProjectPrefix}-batch-pipeline"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vendedlogs/states/${ProjectPrefix}-batch-pipeline:*"
+              - Sid: LogsThatNameNoResource
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                Resource: "*"
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+Outputs:
+  DeployRoleArn:
+    Description: Put this into the GitHub repository variable AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt DeployRole.Arn
+  CloudFormationRoleArn:
+    Description: Passed to `aws cloudformation deploy --role-arn`
+    Value: !GetAtt CloudFormationRole.Arn

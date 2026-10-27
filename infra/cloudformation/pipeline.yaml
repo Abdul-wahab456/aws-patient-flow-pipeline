@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Patient-flow pipeline: the ingest Lambda, the Glue job, the Step Functions workflow and the EventBridge rule that
+  starts it when a batch is complete (landing/batch_NN/_SUCCESS). Needs the foundation stack first.
+  The code is not inside this template: infra/stacks.py uploads it to S3 under the deployment version
+  and this template points at it, so every deployment names the exact code (Git commit) it runs.
+
+Parameters:
+  ProjectPrefix:
+    Type: String
+    Default: pf
+    AllowedPattern: "^[a-z][a-z0-9]{1,7}$"
+    Description: Same prefix as the foundation stack
+  FoundationStackName:
+    Type: String
+    Default: pf-foundation
+    Description: Name of the foundation stack (buckets and roles are read from its outputs)
+  DeploymentVersion:
+    Type: String
+    Description: Name of this deployment, normally the Git commit id. The code is read from this folder in S3.
+  FirstIngestDate:
+    Type: String
+    Default: "2026-11-01"
+    Description: Ingest date of batch 1; batch N gets this date plus N-1 days
+  NumberOfBatches:
+    Type: String
+    Default: "4"
+    Description: How many batches the ingest Lambda accepts
+
+Resources:
+  # ---------------------------------------------------------------- ingest Lambda
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectPrefix}-ingest"
+      RetentionInDays: 30
+
+  IngestFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: IngestLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectPrefix}-ingest"
+      Description: Check a delivered batch and copy it from landing to bronze
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Timeout: 60
+      MemorySize: 256
+      Role: { "Fn::ImportValue": !Sub "${FoundationStackName}-LambdaRoleArn" }
+      Code:
+        S3Bucket: { "Fn::ImportValue": !Sub "${FoundationStackName}-LakeBucket" }
+        S3Key: !Sub "artifacts/${DeploymentVersion}/ingest.zip"
+      Environment:
+        Variables:
+          LAKE_BUCKET: { "Fn::ImportValue": !Sub "${FoundationStackName}-LakeBucket" }
+          FIRST_INGEST_DATE: !Ref FirstIngestDate
+          NUMBER_OF_BATCHES: !Ref NumberOfBatches
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  # ---------------------------------------------------------------- Glue job (bronze to silver)
+  BronzeToSilverJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "${ProjectPrefix}-bronze-to-silver"
+      Description: Flatten the raw FHIR bundles of one batch into the silver tables
+      Role: { "Fn::ImportValue": !Sub "${FoundationStackName}-GlueRoleArn" }
+      GlueVersion: "5.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 10
+      MaxRetries: 0
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub
+          - "s3://${Lake}/glue_scripts/${DeploymentVersion}/bronze_to_silver.py"
+          - Lake: { "Fn::ImportValue": !Sub "${FoundationStackName}-LakeBucket" }
+      DefaultArguments:
+        "--extra-py-files": !Sub
+          - "s3://${Lake}/glue_scripts/${DeploymentVersion}/fhir_utils.py"
+          - Lake: { "Fn::ImportValue": !Sub "${FoundationStackName}-LakeBucket" }
+        "--enable-glue-datacatalog": "true"
+        "--lake_bucket": { "Fn::ImportValue": !Sub "${FoundationStackName}-LakeBucket" }
+        "--silver_database": pf_silver
+        "--TempDir": !Sub
+          - "s3://${Lake}/temp/"
+          - Lake: { "Fn::ImportValue": !Sub "${FoundationStackName}-LakeBucket" }
+        "--job-language": python
+      Tags:
+        project: patient-flow
+
+  # ---------------------------------------------------------------- Step Functions workflow
+  WorkflowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/vendedlogs/states/${ProjectPrefix}-batch-pipeline"
+      RetentionInDays: 30
+
+  Workflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${ProjectPrefix}-batch-pipeline"
+      StateMachineType: STANDARD
+      RoleArn: { "Fn::ImportValue": !Sub "${FoundationStackName}-StepFunctionsRoleArn" }
+      DefinitionS3Location:
+        Bucket: { "Fn::ImportValue": !Sub "${FoundationStackName}-LakeBucket" }
+        Key: !Sub "artifacts/${DeploymentVersion}/state_machine.json"
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt WorkflowLogGroup.Arn
+      Tags:
+        - { Key: project, Value: patient-flow }
+
+  # ---------------------------------------------------------------- event trigger
+  NewBatchRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectPrefix}-new-batch-rule"
+      Description: Start the patient-flow pipeline when a batch delivery is complete (landing/batch_NN/_SUCCESS)
+      State: ENABLED
+      EventPattern:
+        source: ["aws.s3"]
+        detail-type: ["Object Created"]
+        detail:
+          bucket:
+            name: [{ "Fn::ImportValue": !Sub "${FoundationStackName}-LakeBucket" }]
+          object:
+            key:
+              - wildcard: "landing/batch_*/_SUCCESS"
+      Targets:
+        - Id: pipeline
+          Arn: !Ref Workflow
+          RoleArn: { "Fn::ImportValue": !Sub "${FoundationStackName}-TriggerRoleArn" }
+          InputTransformer:
+            InputPathsMap:
+              bucket: $.detail.bucket.name
+              key: $.detail.object.key
+            InputTemplate: '{"bucket": "<bucket>", "key": "<key>"}'
+
+Outputs:
+  StateMachineArn:
+    Value: !Ref Workflow
+  IngestFunctionName:
+    Value: !Ref IngestFunction
+  GlueJobName:
+    Value: !Ref BronzeToSilverJob
+  RuleName:
+    Value: !Ref NewBatchRule

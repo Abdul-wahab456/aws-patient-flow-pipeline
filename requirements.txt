@@ -7,3 +7,5 @@ pytest
 ruff
 pytest-cov
 pyspark==3.5.4
+pyyaml
+cfn-lint

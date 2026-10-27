@@ -5,3 +5,5 @@ pytest==9.1.1
 pytest-cov==7.1.0
 ruff==0.17.2
 pyspark==3.5.4
+pyyaml==6.0.3
+cfn-lint==1.58.0

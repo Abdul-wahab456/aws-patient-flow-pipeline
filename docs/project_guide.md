@@ -92,7 +92,8 @@ Hospital visit records (fake, from Synthea, in the FHIR format) arrive as JSON f
 | 1 | Ingest | Lambda `pf-ingest` with `{"batch": N}` | `landing/batch_0N/` | `bronze/patient_records/ingest_date=<date>/` (+ receipt) |
 | 2 | Flatten | Glue job with `--ingest_date <date>` | bronze files of that date | `silver/<5 tables>/ingest_date=<date>/` and the tables in `pf_silver` |
 | 3 | Load gold | 4 Athena `MERGE` statements, dimensions first, then the fact | silver rows of that date | the 5 gold tables |
-| 4 | Report | Athena views | `fact_encounter` and dimensions | (nothing stored: a view is a query) |
+| 4 | Check quality | 14 SQL checks in one Athena query; a failing check ends the run as `FAILED` | gold and silver tables | the failing check names (in the error) |
+| 5 | Report | Athena views | `fact_encounter` and dimensions | (nothing stored: a view is a query) |
 
 **Step Functions** chains steps 1–3 into one workflow. It starts by itself when a sender writes the marker file `landing/batch_NN/_SUCCESS` (EventBridge), or by hand with `{"batch": N}`.
 Every step is **idempotent**: running it twice for the same batch gives the same result (no duplicates).
@@ -113,13 +114,13 @@ Every step is **idempotent**: running it twice for the same batch gives the same
 ## 6. CI/CD: what happens when you `git push`
 ```
 git push (main) --> GitHub Actions: "Deploy" workflow
-   job 1  checks    ruff (lint) + pytest (127 tests, incl. Spark). Red = STOP, nothing is deployed.
+   job 1  checks    ruff + cfn-lint + pytest (204 tests, incl. Spark). Red = STOP, nothing is deployed.
    job 2  deploy    logs in to AWS with a short-lived identity (OIDC). No AWS keys are stored in GitHub.
-                    infra/deploy.py:
-                       - uploads the Glue scripts to  s3://…/glue_scripts/<commit id>/
-                       - points the Glue job at that folder
-                       - updates the Lambda code and settings
-                       - updates the Step Functions workflow
+                    infra/stacks.py:
+                       - deploys the CloudFormation stack pf-foundation (buckets, catalog, workgroup, roles)
+                       - uploads the code of this commit: glue_scripts/<commit id>/ and artifacts/<commit id>/
+                       - deploys the stack pf-pipeline (Lambda, Glue job, workflow, trigger rule), which points at that code
+Actions tab --> "Release batch" workflow (pick batch 1-4): writes the _SUCCESS marker and waits for the run
 ```
 On a branch other than `main` or on a pull request, only the **CI** checks run (no deploy).
 **CI** = Continuous Integration (check every change). **CD** = Continuous Deployment (ship it automatically).
@@ -177,7 +178,12 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | `ddl/` | `dim_patient`, `dim_facility`, `dim_practitioner`, `fact_encounter`, `dim_date` | Create the gold tables (Iceberg) |
 | `merge/` | `merge_dim_patient`, `merge_dim_facility`, `merge_dim_practitioner`, `merge_fact_encounter` | Upsert one batch into a gold table |
 | `views/` | five `vw_…` files | The KPI views |
-| `sql/dq/` | empty (`.gitkeep`) | Reserved for Phase 8 (data-quality checks) |
+
+### `sql/dq/`
+| Files | What they do |
+|---|---|
+| 14 files (`silver_…`, `gold_…`) | One data-quality check each: returns its name and the number of rows that break the rule (0 = pass). The workflow runs all of them as its last step |
+
 
 ### `step_functions/`
 | File | What it does |
@@ -189,7 +195,11 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 |---|---|
 | `aws_helpers.py` | Shared helper used by the notebooks: `aws()` runs the AWS CLI (masks the account id), `run_athena`, `run_sql_file`, `run_glue_job`, `render_policy` |
 | `sql_files.py` | Plain-Python SQL helpers (placeholders, splitting statements, parsing results); testable |
-| `deploy.py` | The deployment: Glue scripts + job and Lambda. Used by GitHub Actions and by hand |
+| `cloudformation/` | The infrastructure as YAML: `foundation.yaml`, `pipeline.yaml`, `github_oidc.yaml` (Phase 11-12) |
+| `stacks.py` | Deploys the stacks: builds and uploads the code, runs `aws cloudformation deploy`. Used by GitHub Actions and the `cloudformation_stacks` notebook |
+| `release_batch.py` | Delivers a batch (writes the marker) and waits for the run. Used by the Release batch workflow and `run_batches` |
+| `teardown.py` | Deletes what the project created (retire the hand-built resources, or delete everything). Never runs by itself |
+| `deploy.py` | Builds the settings, the Glue job definition, the Lambda package and the workflow definition (used by `stacks.py`); can also deploy them directly, as the first version of CD did |
 | `s3/encryption.json`, `s3/lifecycle_athena_results.json` | Bucket settings: default encryption; delete query results after 7 days |
 | `budget/budget.json` | The $50 monthly budget (the alert rules with your email are not in Git) |
 | `policies/policy_*.json` | **Trust policies**: who may use a role (one per role) |
@@ -214,9 +224,13 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | `github_deploy_role` | Creates the GitHub login trust and the deploy role; tests 14 permissions |
 | `gold_layer` | Creates the gold tables, runs the merges, creates the views, checks everything against the source |
 | `step_functions_pipeline` | Deploys the workflow and tests it: a normal run, a bad batch, two batches at once |
+| `data_quality` | Results of the 14 checks for every batch; proves they can fail (plants a bad row, runs the workflow, removes it) |
+| `kpi_analysis` | Five charts from the five KPI views |
+| `run_batches` | Releases the 4 batches through the trigger, one at a time, and checks the gold tables, quality checks and KPI views |
+| `cloudformation_stacks` | Checks the templates, retires the hand-built resources, deploys the 3 stacks, checks them (19 permission checks), reloads the data |
 | `event_trigger` | Creates the folder trigger (bucket events, EventBridge rule) and tests it with real deliveries |
 
-### `tests/` (127 tests, run by `pytest`, on your laptop and on GitHub)
+### `tests/` (204 tests, run by `pytest`, on your laptop and on GitHub)
 | File | Tests |
 |---|---|
 | `test_ingest_handler.py` | The Lambda logic with a fake S3 |
@@ -224,6 +238,10 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | `test_sql_files.py` | The SQL helpers and every SQL file (rules like "partitioned by year") |
 | `test_deploy.py` | The settings, job definition and Lambda package of the deployment |
 | `test_json_files.py` | Every JSON file is valid |
+| `test_cloudformation.py` | The templates: same permissions as the tested JSON policies, same settings as the code, least-privilege rules for the deploy roles |
+| `test_release_batch.py` | Writing the marker and finding the run, with fake S3 and Step Functions |
+| `test_teardown.py` | Deletion order, skipping what is gone, emptying a bucket first |
+| `test_workflows.py` | The shape of the three GitHub workflows |
 
 ---------------------------------------------------------------------------------------------------
 
@@ -236,5 +254,7 @@ On a branch other than `main` or on a pull request, only the **CI** checks run (
 | Transform a batch to silver | start the Glue job with `--ingest_date 2026-11-0N` (see `bronze_to_silver_job`) |
 | Process a batch end to end | write `landing/batch_NN/_SUCCESS` containing `{"files": <count>}` after uploading the files (or start `pf-batch-pipeline` with `{"batch": N}`) |
 | Load a batch into gold | `run_sql_file("sql/gold/merge/…", ingest_date=…)` (see `gold_layer`) |
-| Deploy my code | `git push` to `main` (or `python infra/deploy.py --version <name>` by hand) |
+| Deploy my code | `git push` to `main` (or `python infra/stacks.py --version <name> --role-arn <CloudFormation role>` by hand) |
+| Load a batch | Actions tab > Release batch, or `notebooks/run_batches.ipynb` |
+| Delete everything | `python infra/teardown.py --plan`, then `--delete-everything` |
 | Ask a question about the data | Athena console → workgroup `pf-wg` → database `pf_gold` |
