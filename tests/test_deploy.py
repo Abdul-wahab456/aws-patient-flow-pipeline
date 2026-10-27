@@ -91,11 +91,30 @@ def test_workflow_has_no_unfilled_placeholders_and_names_the_right_resources():
 def test_workflow_steps_run_in_the_expected_order():
     states = workflow()["States"]
     order, current = [], workflow()["StartAt"]
-    while current != "PipelineSucceeded":
+    while states[current]["Type"] != "Choice":
         order.append(current)
         current = states[current]["Next"]
     assert order == ["Ingest", "BronzeToSilver", "PrepareDateParameter", "MergeDimPatient", "MergeDimFacility",
-                     "MergeDimPractitioner", "MergeFactEncounter"]       # dimensions first, the fact last
+                     "MergeDimPractitioner", "MergeFactEncounter", "DataQualityChecks",
+                     "ReadDataQualityResult"]
+    # dimensions first, the fact last, the quality checks after the loads
+    assert current == "EvaluateDataQuality"
+
+
+def test_the_quality_decision_succeeds_on_ok_and_fails_with_the_names_of_the_failing_checks():
+    states = workflow()["States"]
+    decision = states["EvaluateDataQuality"]
+    ok = {"Variable": "$.dq.failed_checks", "StringEquals": "OK", "Next": "PipelineSucceeded"}
+    assert decision["Choices"] == [ok]
+    assert decision["Default"] == "DataQualityFailed"
+    assert states["DataQualityFailed"]["Next"] == "PipelineFailed"
+    assert "failed_checks" in states["DataQualityFailed"]["Parameters"]["Cause.$"]
+
+
+def test_the_quality_query_contains_every_check_file():
+    query = workflow()["States"]["DataQualityChecks"]["Parameters"]["QueryString"]
+    names = [path.stem for path in (Path(deploy.ROOT) / "sql" / "dq").glob("*.sql")]
+    assert len(names) >= 14 and all(f"'{name}'" in query for name in names)
 
 
 def test_every_next_points_to_a_real_state():
@@ -105,8 +124,10 @@ def test_every_next_points_to_a_real_state():
     for name, state in states.items():
         targets = [state["Next"]] if "Next" in state else []
         targets += [catch["Next"] for catch in state.get("Catch", [])]
+        targets += [choice["Next"] for choice in state.get("Choices", [])]
+        targets += [state["Default"]] if "Default" in state else []
         assert all(target in states for target in targets), name
-        assert "Next" in state or state["Type"] in ("Succeed", "Fail"), f"{name} leads nowhere"
+        assert "Next" in state or state["Type"] in ("Succeed", "Fail", "Choice"), f"{name} leads nowhere"
 
 
 def test_every_task_sends_errors_to_the_failure_state():
@@ -116,12 +137,12 @@ def test_every_task_sends_errors_to_the_failure_state():
                        for catch in state["Catch"]), f"{name} does not catch errors"
 
 
-def test_each_merge_gets_exactly_as_many_date_parameters_as_it_has_question_marks():
+def test_each_athena_step_gets_exactly_as_many_date_parameters_as_it_has_question_marks():
     athena_states = {
         name: state for name, state in workflow()["States"].items()
         if state.get("Resource", "").endswith("startQueryExecution.sync")
     }
-    assert len(athena_states) == 4
+    assert len(athena_states) == 5       # four merges and the quality checks
     for name, state in athena_states.items():
         placeholders = state["Parameters"]["QueryString"].count("?")
         supplied = state["Parameters"]["ExecutionParameters.$"].count("$.sql.date")

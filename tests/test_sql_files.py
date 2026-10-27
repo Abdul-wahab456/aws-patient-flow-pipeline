@@ -121,3 +121,42 @@ def test_the_date_key_is_a_date_not_a_timestamp():
     # sequence() over dates gave timestamps in Athena: the key must be cast to a date
     statement = sql_files.read_statements(ROOT / "sql/gold/ddl/dim_date.sql", PLACEHOLDERS)[0]
     assert "CAST(d AS date) AS date_key" in " ".join(statement.split())
+
+
+# ---- data-quality checks -------------------------------------------------------------------------------------
+CHECKS = sorted((ROOT / "sql" / "dq").glob("*.sql"))
+
+
+def test_there_are_checks_for_silver_and_for_gold():
+    names = {p.stem for p in CHECKS}
+    assert len(names) >= 14
+    assert any(n.startswith("silver_") for n in names) and any(n.startswith("gold_") for n in names)
+
+
+@pytest.mark.parametrize("path", CHECKS, ids=lambda p: p.name)
+def test_a_check_returns_its_own_name_and_a_failure_count(path):
+    statement = sql_files.read_statements(path, {})[0]
+    assert statement.startswith(f"SELECT '{path.stem}' AS check_name, ")     # the name is the file name
+    assert " AS failures" in statement
+    assert "?" not in statement                                              # the date comes from the params CTE
+
+
+BATCH_CHECKS = [p for p in CHECKS if p.stem.startswith("silver_") or p.stem == "gold_batch_missing_in_fact"]
+
+
+@pytest.mark.parametrize("path", BATCH_CHECKS, ids=lambda p: p.name)
+def test_a_check_about_one_batch_reads_the_batch_date_from_params(path):
+    assert "(SELECT ingest_date FROM params)" in sql_files.read_statements(path, {})[0]
+
+
+def test_the_combined_queries_have_exactly_one_date_parameter():
+    statements = list(sql_files.read_checks(ROOT / "sql" / "dq").values())
+    for query in (sql_files.detailed_checks_query(statements), sql_files.failed_checks_query(statements)):
+        assert sql_files.count_parameters(query) == 1
+        assert query.startswith("WITH params AS (SELECT ? AS ingest_date)")
+        assert query.count("UNION ALL") == len(statements) - 1
+
+
+def test_the_workflow_query_returns_ok_when_nothing_fails():
+    query = sql_files.failed_checks_query(["SELECT 'a' AS check_name, 0 AS failures"])
+    assert "'OK'" in query and "FILTER (WHERE failures > 0)" in query

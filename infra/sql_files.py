@@ -58,3 +58,36 @@ def parse_result_rows(rows, has_header=True):
     if has_header and table:
         return table[0], table[1:]
     return [], table
+
+
+# ---- data-quality checks (sql/dq/*.sql) --------------------------------------------------------------------------
+# Each check file is one SELECT that returns one row: check_name, failures (0 = the check passes).
+# Checks about ONE batch read its date from the CTE `params`, which the combined query defines once with the
+# only ? parameter. That way the workflow passes a single date, however many checks there are.
+PARAMS_CTE = "WITH params AS (SELECT ? AS ingest_date)"
+
+
+def read_checks(folder):
+    """The check files of a folder as {check name: statement}, in alphabetical order."""
+    return {path.stem: read_statements(path, {})[0] for path in sorted(Path(folder).glob("*.sql"))}
+
+
+def _union(statements):
+    return "\nUNION ALL\n".join(statements)
+
+
+def detailed_checks_query(statements):
+    """One query returning one row per check: (check_name, failures). Used by the notebook."""
+    return f"{PARAMS_CTE}\nSELECT check_name, failures FROM (\n{_union(statements)}\n)\nORDER BY check_name"
+
+
+def failed_checks_query(statements):
+    """One query returning one text value: the names of the failing checks, or 'OK' when all pass.
+
+    Used by the workflow.
+    """
+    return (
+        f"{PARAMS_CTE}\n"
+        "SELECT COALESCE(array_join(array_agg(check_name ORDER BY check_name) FILTER (WHERE failures > 0), ', '), "
+        f"'OK') AS failed_checks FROM (\n{_union(statements)}\n)"
+    )

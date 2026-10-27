@@ -11,7 +11,7 @@ one commit. To roll back, deploy an older commit again.
 Settings come from environment variables (used by GitHub Actions) or, when a variable is missing,
 from config/settings.json (used on a laptop):
     LAKE_BUCKET, SILVER_DATABASE, GLUE_JOB_NAME, LAMBDA_NAME, FIRST_INGEST_DATE, NUMBER_OF_BATCHES, AWS_REGION,
-    ATHENA_WORKGROUP, STATE_MACHINE_NAME
+    ATHENA_WORKGROUP, STATE_MACHINE_NAME, RESULTS_BUCKET, PROJECT_PREFIX
 AWS credentials come from the normal AWS sources (GitHub Actions logs in with a short-lived role).
 """
 import argparse
@@ -23,7 +23,7 @@ import zipfile
 from pathlib import Path
 
 import boto3
-from sql_files import read_statements
+from sql_files import failed_checks_query, read_checks, read_statements
 
 ROOT = Path(__file__).resolve().parents[1]
 GLUE_SCRIPTS = ("bronze_to_silver.py", "fhir_utils.py")
@@ -56,6 +56,9 @@ def load_config(environ=None, settings_path=None):
         "number_of_batches": str(pick("NUMBER_OF_BATCHES", "number_of_batches", default="4")),
         "workgroup": pick("ATHENA_WORKGROUP", "athena_workgroup", default="pf-wg"),
         "state_machine": pick("STATE_MACHINE_NAME", "state_machine_name", default="pf-batch-pipeline"),
+        # only the CloudFormation stacks (infra/stacks.py) need these two
+        "results_bucket": pick("RESULTS_BUCKET", "athena_results_bucket"),
+        "project_prefix": pick("PROJECT_PREFIX", "project_prefix", default="pf"),
     }
     missing = [name for name in ("lake_bucket", "silver_database") if not config[name]]
     if missing:
@@ -150,9 +153,10 @@ def deploy_lambda(session, config):
 def state_machine_definition(config, account, root=ROOT):
     """The Step Functions workflow, built from step_functions/pf_batch_pipeline.asl.json.
 
-    The template holds placeholders: the names of the Lambda, the Glue job and the Athena workgroup, and
-    "__SQL:<name>__" markers that are replaced by the text of sql/gold/merge/<name>.sql. The SQL therefore
-    exists in one place only and the workflow always runs exactly the SQL files of the same commit.
+    The template holds placeholders: the names of the Lambda, the Glue job and the Athena workgroup,
+    "__SQL:<name>__" markers that are replaced by the text of sql/gold/merge/<name>.sql, and "__SQL_DQ__", which
+    becomes the one query that runs every check of sql/dq. The SQL therefore exists in one place only and the
+    workflow always runs exactly the SQL files of the same commit.
     """
     template = json.loads((root / "step_functions" / "pf_batch_pipeline.asl.json").read_text(encoding="utf-8"))
     names = {
@@ -167,6 +171,8 @@ def state_machine_definition(config, account, root=ROOT):
         if isinstance(node, list):
             return [fill(value) for value in node]
         if isinstance(node, str):
+            if node == "__SQL_DQ__":
+                return failed_checks_query(list(read_checks(root / "sql" / "dq").values()))
             sql_marker = re.fullmatch(r"__SQL:([a-z_]+)__", node)
             if sql_marker:
                 return read_statements(root / "sql" / "gold" / "merge" / f"{sql_marker.group(1)}.sql", {})[0]

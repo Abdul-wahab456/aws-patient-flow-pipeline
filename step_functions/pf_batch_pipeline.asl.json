@@ -115,7 +115,57 @@
         { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2 }
       ],
       "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed" }],
-      "Next": "PipelineSucceeded"
+      "Next": "DataQualityChecks"
+    },
+
+    "DataQualityChecks": {
+      "Type": "Task",
+      "Comment": "Run all checks in sql/dq in ONE query. It returns the names of the failing checks, or OK.",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "__SQL_DQ__",
+        "WorkGroup": "__WORKGROUP__",
+        "ExecutionParameters.$": "States.Array($.sql.date)"
+      },
+      "ResultSelector": { "query_id.$": "$.QueryExecution.QueryExecutionId" },
+      "ResultPath": "$.dq",
+      "Retry": [
+        { "ErrorEquals": ["Athena.TooManyRequestsException", "Athena.InternalServerException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 },
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed" }],
+      "Next": "ReadDataQualityResult"
+    },
+
+    "ReadDataQualityResult": {
+      "Type": "Task",
+      "Comment": "Row 0 of an Athena result is the header; row 1 holds the single answer.",
+      "Resource": "arn:aws:states:::athena:getQueryResults",
+      "Parameters": { "QueryExecutionId.$": "$.dq.query_id" },
+      "ResultSelector": { "failed_checks.$": "$.ResultSet.Rows[1].Data[0].VarCharValue" },
+      "ResultPath": "$.dq",
+      "Retry": [
+        { "ErrorEquals": ["Athena.TooManyRequestsException", "Athena.InternalServerException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed" }],
+      "Next": "EvaluateDataQuality"
+    },
+
+    "EvaluateDataQuality": {
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.dq.failed_checks", "StringEquals": "OK", "Next": "PipelineSucceeded" }],
+      "Default": "DataQualityFailed"
+    },
+
+    "DataQualityFailed": {
+      "Type": "Pass",
+      "Comment": "Turn the names of the failing checks into the error the failure state reports",
+      "Parameters": {
+        "Error": "DataQualityFailed",
+        "Cause.$": "States.Format('These data-quality checks failed: {}', $.dq.failed_checks)"
+      },
+      "ResultPath": "$.error",
+      "Next": "PipelineFailed"
     },
 
     "PipelineSucceeded": {

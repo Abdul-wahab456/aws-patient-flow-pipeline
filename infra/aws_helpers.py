@@ -15,6 +15,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import boto3
+import release_batch as release
 from sql_files import count_parameters, parse_result_rows, quote_date, read_statements
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -226,3 +228,44 @@ def run_sql_file(path, ingest_date=None, **placeholders):
             raise ValueError(f"{path} needs an ingest_date")
         result = run_athena(statement, parameters=[quote_date(ingest_date)] * wanted if wanted else None, timeout=300)
     return result
+
+
+def start_execution(state_machine_arn, payload, name=None):
+    """Start one run of a Step Functions workflow with a JSON input; return the execution ARN."""
+    command = ["stepfunctions", "start-execution", "--state-machine-arn", state_machine_arn,
+               "--input", json.dumps(payload)]
+    if name:
+        command += ["--name", name]
+    return aws_json(*command)["executionArn"]
+
+
+def wait_for_execution(execution_arn, timeout=1500, poll=10):
+    """Wait until a workflow run is no longer RUNNING; return its description (status, output, error, cause)."""
+    deadline = time.time() + timeout
+    while True:
+        execution = aws_json("stepfunctions", "describe-execution", "--execution-arn", execution_arn)
+        if execution["status"] != "RUNNING":
+            return execution
+        if time.time() > deadline:
+            raise TimeoutError(f"execution {execution_arn} still running after {timeout}s")
+        time.sleep(poll)
+
+
+def execution_steps(execution_arn):
+    """The names of the workflow steps a run entered, in order."""
+    events = aws_json("stepfunctions", "get-execution-history", "--execution-arn", execution_arn)["events"]
+    return [e["stateEnteredEventDetails"]["name"] for e in events if e["type"].endswith("StateEntered")]
+
+
+def files_in_batch(batch, bucket=None):
+    """The data files delivered to landing/batch_NN/ (the _SUCCESS marker is not a data file)."""
+    bucket = bucket or LAKE
+    prefix = f"landing/batch_{batch:02d}/"
+    objects = aws_json("s3api", "list-objects-v2", "--bucket", bucket, "--prefix", prefix).get("Contents", [])
+    return [o for o in objects if not o["Key"].endswith("/_SUCCESS")]
+
+
+def release_batch(batch, state_machine_arn, bucket=None, announced_files=None, wait=True, timeout=1500):
+    """Deliver a batch the way a sender does (see infra/release_batch.py) and return the run it starts."""
+    return release.release_batch(boto3.Session(region_name=REGION), bucket or LAKE, batch, state_machine_arn,
+                                 announced_files=announced_files, wait=wait, timeout=timeout)
