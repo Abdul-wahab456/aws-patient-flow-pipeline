@@ -6,6 +6,8 @@ The infrastructure is CloudFormation, deployment is GitHub Actions without any s
 
 ## How it works
 
+![AWS architecture](docs/images/aws_architecture.png)
+
 ![Data flow of one batch](docs/images/data_flow.png)
 
 ![Step Functions workflow](docs/images/step_functions_workflow.png)
